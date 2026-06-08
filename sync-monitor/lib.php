@@ -35,10 +35,14 @@ function deny_if_external(): void
     }
 }
 
-function run(string $cmd): string
+function run(string $cmd, int $timeoutSec = 0): string
 {
     $out = [];
-    exec($cmd . ' 2>&1', $out, $code);
+    $wrapped = $timeoutSec > 0 ? 'timeout ' . $timeoutSec . ' ' . $cmd : $cmd;
+    exec($wrapped . ' 2>&1', $out, $code);
+    if ($timeoutSec > 0 && $code === 124) {
+        return '';
+    }
     return implode("\n", $out);
 }
 
@@ -89,35 +93,53 @@ function folder_pairs_from(string $text): array
     return $pairs;
 }
 
+const CMD_TIMEOUT_SEC = 6;
+const DU_TIMEOUT_SEC = 8;
+
 function dir_size(string $path): string
 {
     if (!is_dir($path)) {
         return '—';
     }
-    return trim(run('du -sh ' . escapeshellarg($path) . " | awk '{print $1}'"));
+    $out = trim(run('du -sh ' . escapeshellarg($path) . " | awk '{print $1}'", DU_TIMEOUT_SEC));
+    return $out !== '' ? $out : '⏳';
 }
 
-function remote_ssh(string $host, string $remoteCmd, string $user = 'sitkeitamas', int $port = 22): string
+function remote_ssh(string $host, string $remoteCmd, string $user = 'sitkeitamas', int $port = 22, int $timeoutSec = CMD_TIMEOUT_SEC): string
 {
     $cmd = sprintf(
-        'ssh -o ConnectTimeout=8 -o BatchMode=yes -p %d %s@%s %s 2>/dev/null',
+        'ssh -o ConnectTimeout=5 -o ServerAliveInterval=3 -o ServerAliveCountMax=1 -o BatchMode=yes -p %d %s@%s %s 2>/dev/null',
         $port,
         escapeshellarg($user),
         escapeshellarg($host),
         escapeshellarg($remoteCmd)
     );
-    return trim(run($cmd));
+    return trim(run($cmd, $timeoutSec));
 }
 
 function remote_dir_size(string $host, string $path, string $user = 'sitkeitamas', int $port = 22): string
 {
-    $out = remote_ssh($host, 'du -sh ' . escapeshellarg($path) . " 2>/dev/null | awk '{print \$1}'", $user, $port);
-    return $out !== '' ? $out : '—';
+    // Naszika du lassú — rövid timeout, ne blokkolja a panelt
+    $limit = $host === '192.168.9.29' ? 5 : DU_TIMEOUT_SEC;
+    $out = remote_ssh(
+        $host,
+        'du -sh ' . escapeshellarg($path) . " 2>/dev/null | awk '{print \$1}'",
+        $user,
+        $port,
+        $limit
+    );
+    return $out !== '' ? $out : '⏳';
 }
 
 function remote_volume_free(string $host, string $user = 'sitkeitamas', int $port = 22): string
 {
-    $out = remote_ssh($host, "df -h /volume1 2>/dev/null | tail -1 | awk '{print \$4\" szabad (\"\$5\" haszn.)\"}'", $user, $port);
+    $out = remote_ssh(
+        $host,
+        "df -h /volume1 2>/dev/null | tail -1 | awk '{print \$4\" szabad (\"\$5\" haszn.)\"}'",
+        $user,
+        $port,
+        CMD_TIMEOUT_SEC
+    );
     return $out !== '' ? $out : '—';
 }
 
@@ -162,7 +184,7 @@ function build_folder_sizes(array $pairs, string $host, int $port): array
     return $sizes;
 }
 
-function build_status(): array
+function build_status(bool $includeSizes = false): array
 {
     $videoEnv = parse_env_file(ENV_FILE);
     $homesEnv = parse_env_file(HOMES_ENV_FILE);
@@ -171,26 +193,47 @@ function build_status(): array
     $homesHost = $homesEnv['REMOTE_HOST'] ?? '192.168.9.29';
     $homesPort = (int)($homesEnv['REMOTE_PORT'] ?? 22);
 
+    $videoPairs = folder_pairs_from(read_folders_conf_file(FOLDERS_FILE));
+    $homesPairs = folder_pairs_from(read_folders_conf_file(HOMES_FOLDERS_FILE));
+    $videoFolders = $includeSizes
+        ? build_folder_sizes($videoPairs, $videoHost, $videoPort)
+        : array_map(static fn(array $p) => [
+            'label' => basename(dirname($p['src'])) . '/' . basename($p['src']),
+            'src' => $p['src'],
+            'dest' => $p['dest'],
+            'local' => '—',
+            'remote' => '—',
+        ], $videoPairs);
+    $homesFolders = $includeSizes
+        ? build_folder_sizes($homesPairs, $homesHost, $homesPort)
+        : array_map(static fn(array $p) => [
+            'label' => basename(dirname($p['src'])) . '/' . basename($p['src']),
+            'src' => $p['src'],
+            'dest' => $p['dest'],
+            'local' => '—',
+            'remote' => '—',
+        ], $homesPairs);
+
     return [
         'time' => date('Y-m-d H:i:s'),
+        'sizes_included' => $includeSizes,
         'processes' => process_status(),
         'video' => [
-            'folders' => build_folder_sizes(folder_pairs_from(read_folders_conf_file(FOLDERS_FILE)), $videoHost, $videoPort),
+            'folders' => $videoFolders,
             'env' => $videoEnv,
             'folders_conf' => read_folders_conf_file(FOLDERS_FILE),
             'remote_disk' => remote_volume_free($videoHost, 'sitkeitamas', $videoPort),
             'log' => tail_file(VIDEO_LOG, 35),
         ],
         'homes' => [
-            'folders' => build_folder_sizes(folder_pairs_from(read_folders_conf_file(HOMES_FOLDERS_FILE)), $homesHost, $homesPort),
+            'folders' => $homesFolders,
             'env' => $homesEnv,
             'folders_conf' => read_folders_conf_file(HOMES_FOLDERS_FILE),
             'remote_disk' => remote_volume_free($homesHost, 'sitkeitamas', $homesPort),
             'log' => tail_file(HOMES_LOG, 35),
         ],
         'webcam_log' => tail_file(WEBCAM_LOG, 15),
-        // visszafelé kompatibilitás
-        'folders' => build_folder_sizes(folder_pairs_from(read_folders_conf_file(FOLDERS_FILE)), $videoHost, $videoPort),
+        'folders' => $videoFolders,
         'env' => $videoEnv,
         'folders_conf' => read_folders_conf_file(FOLDERS_FILE),
         'video_log' => tail_file(VIDEO_LOG, 35),

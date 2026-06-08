@@ -52,6 +52,7 @@ deny_if_external();
         <button type="button" class="secondary" onclick="ctl('restart')">Restart</button>
         <button type="button" class="danger" onclick="ctl('stop')">Stop mind</button>
         <button type="button" class="secondary" onclick="refresh()">Frissítés</button>
+        <button type="button" class="secondary" onclick="loadSizes()">Méretek (lassú)</button>
       </div>
     </div>
   </div>
@@ -226,6 +227,15 @@ document.getElementById('homes-cfg-form').onsubmit = async (ev) => {
   msg(d.ok ? d.message : d.error, d.ok);
   refresh();
 };
+
+async function loadSizes() {
+  msg('Méretek betöltése… (naszika du lassú lehet)', true);
+  const r = await fetch('api.php?action=status&sizes=1');
+  const d = await r.json();
+  document.getElementById('video-sizes').innerHTML = folderTable(d.video.folders, 'DSM2');
+  document.getElementById('homes-sizes').innerHTML = folderTable(d.homes.folders, 'naszika');
+  msg(d.sizes_included ? 'Méretek frissítve' : 'Kész', true);
+}
 
 refresh();
 setInterval(refresh, 30000);

@@ -35,6 +35,7 @@ Log: `/tmp/sync_monitor.log`
 - Aktív homes rsync (192.168.9.29 felé)  
 - User `Drive` méretek: helyi vs naszika (`sync_homes_folders.conf`)  
 - Naszika szabad tárhely (`df`) — lassú lehet, ha a naszika terhelve van  
+- **„Méretek (lassú)”** gomb — külön kérés, mert a naszika `du` blokkolhatja a panelt  
 - `homes_sync.log` utolsó sorai  
 - Szerkesztés: `sync_homes.env` (IP, port, bwlimit, poll, éjszakai ablak) + `sync_homes_folders.conf`  
 - Gomb: **Homes sync most** (éjszakai ablak figyelmen kívül)

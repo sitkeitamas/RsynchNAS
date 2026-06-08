@@ -3,7 +3,7 @@
 Budapesti Synology (`nasznagy`) → edericsi DSM2 (`dsm2`) rsync-alapú tükrözés: videó, webcam snapshotok, belső monitor webapp.
 
 **Éles telepítés:** `nasznagy:/volume1/homes/sitkeitamas/scripts/`  
-**Utolsó frissítés:** 2026-06-08
+**Utolsó frissítés:** 2026-06-08 (homes rsync előfeltétel, teljes videó mirror, tar fallback)
 
 Kapcsolódó hálózat/VPN dokumentáció: [beryl-s2s-vpn](https://github.com/sitkeitamas/beryl-s2s-vpn)
 
@@ -82,6 +82,9 @@ home-log        # homes_sync.log
 ├── sync_homes_to_dsm3.sh     # rsync motor → naszika
 ├── sync_homes_trigger.sh     # 30 perc poll + éjszakai másolás
 ├── sync_homes_now.sh           # azonnali homes sync
+├── sync_homes_test_now.sh      # teszt: csak tamas.sitkei.jr
+├── sync_homes_after_test.sh    # teszt után teljes homes sync
+├── enable_rsync_dsm3.sh        # egyszeri rsync be a naszikán
 ├── update_web_cameras.sh     # kamera képek (legacy, webcam: sync_ederics.sh)
 ├── sync_status.sh            # terminálos állapot
 ├── video_sync.log            # videó napló
@@ -108,6 +111,25 @@ nasznagy (192.168.5.9)
 | `inotifywait: command not found` | nincs telepítve | poll mód megy (120 s); opcionális Entware |
 | `video_sync.log` nem frissül | root + `$HOME` útvonal | sitkeitamas user + abszolút útvonalak (javítva) |
 | Homepage képek régiek | webcam task root volt | sitkeitamas user (javítva 2026-06-08) |
+| Homes: `Permission denied` + rsync code 43 | **DSM3 rsync szolgáltatás ki** | naszika: Vezérlőpult → Fájlszolgáltatások → rsync → [README-homes-sync.md](README-homes-sync.md) |
+| Videó rossz mappába megy | `sync_folders.conf` elírás | Egy sor: `/volume1/video\|/volume1/video` |
+| Env/conf változás „nem érvényesül” | Futó rsync a régi paraméterekkel | `sync_now.sh` / `sync_homes_now.sh` / restart |
+
+## Legfrissebb felismerések (2026-06-08)
+
+### Homes → naszika (DSM3)
+
+- SSH kulcs rendben, de **rsync-over-SSH csak bekapcsolt rsync szolgáltatással** működik a cél NAS-on (873/tcp).
+- Hibaüzenet félrevezető: „Permission denied” — nem fájl-jog, hanem kikapcsolt rsync.
+- `HOMES_TRANSPORT=auto`: rsync ha elérhető, különben tar/SSH fallback (nincs bwlimit, lassú).
+- Új user: `tamas.sitkei.jr`; teszt scriptek: `sync_homes_test_now.sh`, `sync_homes_after_test.sh`.
+- nasznagy (x86_64) ↔ naszika (aarch64): architektúra különbözik, rsync binárist nem lehet átmásolni.
+
+### Videó → DSM2
+
+- `sync_folders.conf`: teljes `/volume1/video|/volume1/video` (korábbi `202603→202604` typo javítva).
+- `RSYNC_BWLIMIT=0` — korlát nélküli videó sync; új futás kell a változáshoz.
+- DSM2: Drive Server + Video Station eltávolítva, ~940 GB szabad; teljes video mirror elfér.
 
 ## Kapcsolódó dokumentáció (git)
 

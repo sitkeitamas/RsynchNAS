@@ -10,7 +10,8 @@ $action = $_GET['action'] ?? $_POST['action'] ?? 'status';
 try {
     switch ($action) {
         case 'status':
-            echo json_encode(build_status(), JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+            $sizes = isset($_GET['sizes']) && $_GET['sizes'] === '1';
+            echo json_encode(build_status($sizes), JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
             break;
 
         case 'save':
