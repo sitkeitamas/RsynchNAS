@@ -10,6 +10,7 @@ stop_sync() {
     rsync_pids=$(ps aux | grep -E "[r]sync.*(dsm2|192\.168\.9\.(19|29))" | awk '{print $2}')
     [[ -n "$rsync_pids" ]] && kill $rsync_pids 2>/dev/null
     rm -f /tmp/sync_video_trigger.pid /tmp/sync_homes_trigger.pid
+    [[ -x "${SCRIPT_DIR}/sync-monitor/watchdog.sh" ]] && bash "${SCRIPT_DIR}/sync-monitor/watchdog.sh" stop
     [[ -x "${SCRIPT_DIR}/sync-monitor/serve.sh" ]] && bash "${SCRIPT_DIR}/sync-monitor/serve.sh" stop
     echo "Leállítva."
 }
@@ -27,6 +28,10 @@ start_sync() {
     fi
     if [[ -x "${SCRIPT_DIR}/sync-monitor/serve.sh" ]]; then
         bash "${SCRIPT_DIR}/sync-monitor/serve.sh" start
+        bash "${SCRIPT_DIR}/sync-monitor/update_disk_cache.sh" 2>/dev/null || true
+    fi
+    if [[ -x "${SCRIPT_DIR}/sync-monitor/watchdog.sh" ]]; then
+        bash "${SCRIPT_DIR}/sync-monitor/watchdog.sh" start
     fi
 }
 

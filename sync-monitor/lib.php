@@ -93,8 +93,10 @@ function folder_pairs_from(string $text): array
     return $pairs;
 }
 
-const CMD_TIMEOUT_SEC = 6;
-const DU_TIMEOUT_SEC = 8;
+const CMD_TIMEOUT_SEC = 5;
+const DU_TIMEOUT_SEC = 6;
+const STATUS_CACHE_FILE = '/tmp/sync_monitor_disk_cache.json';
+const STATUS_CACHE_TTL_SEC = 120;
 
 function dir_size(string $path): string
 {
@@ -107,11 +109,11 @@ function dir_size(string $path): string
 
 function remote_ssh(string $host, string $remoteCmd, string $user = 'sitkeitamas', int $port = 22, int $timeoutSec = CMD_TIMEOUT_SEC): string
 {
+    $target = escapeshellarg($user . '@' . $host);
     $cmd = sprintf(
-        'ssh -o ConnectTimeout=5 -o ServerAliveInterval=3 -o ServerAliveCountMax=1 -o BatchMode=yes -p %d %s@%s %s 2>/dev/null',
+        'ssh -o ConnectTimeout=4 -o ServerAliveInterval=2 -o ServerAliveCountMax=1 -o BatchMode=yes -p %d %s %s 2>/dev/null',
         $port,
-        escapeshellarg($user),
-        escapeshellarg($host),
+        $target,
         escapeshellarg($remoteCmd)
     );
     return trim(run($cmd, $timeoutSec));
@@ -145,11 +147,11 @@ function remote_volume_free(string $host, string $user = 'sitkeitamas', int $por
 
 function process_status(): array
 {
-    $ps = run('ps aux');
+    $ps = run('ps aux 2>/dev/null | grep -E "sync_(video|homes)|rsync" | grep -v grep', 3);
     $videoRsync = [];
     $homesRsync = [];
     foreach (explode("\n", $ps) as $line) {
-        if (!str_contains($line, 'rsync')) {
+        if ($line === '' || !str_contains($line, 'rsync')) {
             continue;
         }
         if (str_contains($line, 'dsm2') || str_contains($line, '192.168.9.19')) {
@@ -168,6 +170,25 @@ function process_status(): array
     ];
 }
 
+function cached_remote_disk(string $key, string $host, int $port, bool $refresh = false): string
+{
+    $cache = [];
+    if (is_readable(STATUS_CACHE_FILE)) {
+        $cache = json_decode((string)file_get_contents(STATUS_CACHE_FILE), true) ?: [];
+    }
+    if (!$refresh) {
+        return (string)($cache[$key] ?? '—');
+    }
+    $value = remote_volume_free($host, 'sitkeitamas', $port);
+    if ($value === '') {
+        return (string)($cache[$key] ?? '—');
+    }
+    $cache[$key] = $value;
+    $cache[$key . '_ts'] = time();
+    @file_put_contents(STATUS_CACHE_FILE, json_encode($cache, JSON_UNESCAPED_UNICODE));
+    return $value;
+}
+
 function build_folder_sizes(array $pairs, string $host, int $port): array
 {
     $sizes = [];
@@ -184,7 +205,7 @@ function build_folder_sizes(array $pairs, string $host, int $port): array
     return $sizes;
 }
 
-function build_status(bool $includeSizes = false): array
+function build_status(bool $includeSizes = false, bool $refreshDisk = false): array
 {
     $videoEnv = parse_env_file(ENV_FILE);
     $homesEnv = parse_env_file(HOMES_ENV_FILE);
@@ -222,14 +243,14 @@ function build_status(bool $includeSizes = false): array
             'folders' => $videoFolders,
             'env' => $videoEnv,
             'folders_conf' => read_folders_conf_file(FOLDERS_FILE),
-            'remote_disk' => remote_volume_free($videoHost, 'sitkeitamas', $videoPort),
+            'remote_disk' => cached_remote_disk('video_disk', $videoHost, $videoPort, $refreshDisk),
             'log' => tail_file(VIDEO_LOG, 35),
         ],
         'homes' => [
             'folders' => $homesFolders,
             'env' => $homesEnv,
             'folders_conf' => read_folders_conf_file(HOMES_FOLDERS_FILE),
-            'remote_disk' => remote_volume_free($homesHost, 'sitkeitamas', $homesPort),
+            'remote_disk' => cached_remote_disk('homes_disk', $homesHost, $homesPort, $refreshDisk),
             'log' => tail_file(HOMES_LOG, 35),
         ],
         'webcam_log' => tail_file(WEBCAM_LOG, 15),

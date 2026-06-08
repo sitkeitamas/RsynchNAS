@@ -155,8 +155,16 @@ function folderTable(folders, remoteLabel) {
   return tbl + '</table>';
 }
 
+let refreshBusy = false;
+
 async function refresh() {
-  const r = await fetch('api.php?action=status');
+  if (refreshBusy) return;
+  refreshBusy = true;
+  try {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 12000);
+  const r = await fetch('api.php?action=status', { signal: ctrl.signal });
+  clearTimeout(t);
   const d = await r.json();
   const p = d.processes;
   document.getElementById('status-proc').innerHTML = `
@@ -193,6 +201,11 @@ async function refresh() {
     if (el && h.env[k] !== undefined) el.value = h.env[k];
   });
   document.getElementById('homes_folders_conf').value = h.folders_conf;
+  } catch (e) {
+    msg('Frissítés timeout — a panel újrapróbálja', false);
+  } finally {
+    refreshBusy = false;
+  }
 }
 
 async function ctl(cmd) {
@@ -229,16 +242,25 @@ document.getElementById('homes-cfg-form').onsubmit = async (ev) => {
 };
 
 async function loadSizes() {
-  msg('Méretek betöltése… (naszika du lassú lehet)', true);
-  const r = await fetch('api.php?action=status&sizes=1');
-  const d = await r.json();
-  document.getElementById('video-sizes').innerHTML = folderTable(d.video.folders, 'DSM2');
-  document.getElementById('homes-sizes').innerHTML = folderTable(d.homes.folders, 'naszika');
-  msg(d.sizes_included ? 'Méretek frissítve' : 'Kész', true);
+  msg('Méretek betöltése… (több percig tarthat)', true);
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 120000);
+    const r = await fetch('api.php?action=status&sizes=1&disk=1', { signal: ctrl.signal });
+    clearTimeout(t);
+    const d = await r.json();
+    document.getElementById('video-sizes').innerHTML = folderTable(d.video.folders, 'DSM2');
+    document.getElementById('homes-sizes').innerHTML = folderTable(d.homes.folders, 'naszika');
+    document.getElementById('video-disk').textContent = 'DSM2 tár: ' + (d.video.remote_disk || '—');
+    document.getElementById('homes-disk').textContent = 'Naszika tár: ' + (d.homes.remote_disk || '—');
+    msg(d.sizes_included ? 'Méretek frissítve' : 'Kész', true);
+  } catch (e) {
+    msg('Méretek betöltése timeout — próbáld újra később', false);
+  }
 }
 
 refresh();
-setInterval(refresh, 30000);
+setInterval(refresh, 60000);
 </script>
 </body>
 </html>

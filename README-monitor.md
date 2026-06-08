@@ -6,17 +6,35 @@
 
 ## Indítás / leállítás
 
-Automatikusan indul `sync_control.sh start` részeként (boot task).
+Automatikusan indul `sync_control.sh start` részeként (boot task), **watchdog-dal** együtt.
 
 Kézi:
 
 ```bash
-~/scripts/sync-monitor/serve.sh start
-~/scripts/sync-monitor/serve.sh stop
-~/scripts/sync-monitor/serve.sh status
+~/scripts/sync-monitor/serve.sh start|stop|status
+~/scripts/sync-monitor/watchdog.sh start|stop|once
 ```
 
-Log: `/tmp/sync_monitor.log`
+Logok:
+
+- `/tmp/sync_monitor.log` — PHP szerver
+- `/tmp/sync_monitor_watchdog.log` — automatikus újraindítás
+
+## Stabilitás (2026-06-08)
+
+A PHP beépített szerver **egyszálas** — egy lassú kérés (pl. „Méretek (lassú)”) blokkolhatja a panelt.
+
+**Megoldások a repóban:**
+
+| Komponens | Szerep |
+|-----------|--------|
+| `health.php` | Gyors health check (nem SSH-zik) |
+| `watchdog.sh` | 5 percenként ellenőriz, beragadásnál újraindít |
+| `update_disk_cache.sh` | 10 percenként frissíti a DSM2/naszika `df` cache-t háttérben |
+| Auto-refresh | 60 mp (volt 30), fetch timeout 12 mp |
+| Gyors `/api.php?action=status` | **Nem SSH-zik** — tárhely cache-ből jön |
+
+A watchdog a `sync_control.sh start`-tal indul; boot task után automatikus.
 
 ## Mit tud a felület
 

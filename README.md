@@ -89,7 +89,7 @@ home-log        # homes_sync.log
 ├── sync_status.sh            # terminálos állapot
 ├── video_sync.log            # videó napló
 ├── sync_log.txt              # webcam napló
-└── sync-monitor/             # belső web panel (PHP)
+└── sync-monitor/             # belső web panel (PHP + watchdog)
 ```
 
 ## Hálózati útvonal (röviden)

@@ -4,6 +4,7 @@ require __DIR__ . '/lib.php';
 
 deny_if_external();
 header('Content-Type: application/json; charset=utf-8');
+set_time_limit(45);
 
 $action = $_GET['action'] ?? $_POST['action'] ?? 'status';
 
@@ -11,7 +12,8 @@ try {
     switch ($action) {
         case 'status':
             $sizes = isset($_GET['sizes']) && $_GET['sizes'] === '1';
-            echo json_encode(build_status($sizes), JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+            $refreshDisk = isset($_GET['disk']) && $_GET['disk'] === '1';
+            echo json_encode(build_status($sizes, $refreshDisk), JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
             break;
 
         case 'save':
