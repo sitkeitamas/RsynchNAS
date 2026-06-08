@@ -20,8 +20,14 @@ try {
             if (isset($_POST['env']) && is_array($_POST['env'])) {
                 save_env($_POST['env']);
             }
+            if (isset($_POST['homes_env']) && is_array($_POST['homes_env'])) {
+                save_homes_env($_POST['homes_env']);
+            }
             if (isset($_POST['folders_conf'])) {
                 save_folders((string)$_POST['folders_conf']);
+            }
+            if (isset($_POST['homes_folders_conf'])) {
+                save_homes_folders((string)$_POST['homes_folders_conf']);
             }
             echo json_encode(['ok' => true, 'message' => 'Mentve (backup: .bak.*)']);
             break;
@@ -31,7 +37,7 @@ try {
                 throw new RuntimeException('POST kell');
             }
             $cmd = $_POST['cmd'] ?? '';
-            if (!in_array($cmd, ['start', 'stop', 'restart', 'sync_now'], true)) {
+            if (!in_array($cmd, ['start', 'stop', 'restart', 'sync_now', 'sync_homes_now'], true)) {
                 throw new RuntimeException('Érvénytelen parancs');
             }
             $out = run_action($cmd);

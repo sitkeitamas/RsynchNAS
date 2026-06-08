@@ -4,8 +4,12 @@ declare(strict_types=1);
 const SCRIPTS_DIR = '/volume1/homes/sitkeitamas/scripts';
 const ENV_FILE = SCRIPTS_DIR . '/sync_video.env';
 const FOLDERS_FILE = SCRIPTS_DIR . '/sync_folders.conf';
+const HOMES_ENV_FILE = SCRIPTS_DIR . '/sync_homes.env';
+const HOMES_FOLDERS_FILE = SCRIPTS_DIR . '/sync_homes_folders.conf';
 const VIDEO_LOG = SCRIPTS_DIR . '/video_sync.log';
+const HOMES_LOG = SCRIPTS_DIR . '/homes_sync.log';
 const WEBCAM_LOG = SCRIPTS_DIR . '/sync_log.txt';
+const HOMES_PENDING_FILE = '/tmp/sync_homes_pending';
 const BIND_HOST = '192.168.5.9';
 const BIND_PORT = 8765;
 
@@ -46,13 +50,13 @@ function tail_file(string $path, int $lines = 40): string
     return run('tail -n ' . (int)$lines . ' ' . escapeshellarg($path));
 }
 
-function parse_env_file(): array
+function parse_env_file(string $path): array
 {
     $cfg = [];
-    if (!is_readable(ENV_FILE)) {
+    if (!is_readable($path)) {
         return $cfg;
     }
-    foreach (file(ENV_FILE, FILE_IGNORE_NEW_LINES) as $line) {
+    foreach (file($path, FILE_IGNORE_NEW_LINES) as $line) {
         $line = trim($line);
         if ($line === '' || $line[0] === '#') {
             continue;
@@ -64,15 +68,15 @@ function parse_env_file(): array
     return $cfg;
 }
 
-function read_folders_conf(): string
+function read_folders_conf_file(string $path): string
 {
-    return is_readable(FOLDERS_FILE) ? file_get_contents(FOLDERS_FILE) : '';
+    return is_readable($path) ? file_get_contents($path) : '';
 }
 
-function folder_pairs(): array
+function folder_pairs_from(string $text): array
 {
     $pairs = [];
-    foreach (explode("\n", read_folders_conf()) as $line) {
+    foreach (explode("\n", $text) as $line) {
         $line = trim($line);
         if ($line === '' || $line[0] === '#') {
             continue;
@@ -93,58 +97,103 @@ function dir_size(string $path): string
     return trim(run('du -sh ' . escapeshellarg($path) . " | awk '{print $1}'"));
 }
 
-function remote_dir_size(string $host, string $path, string $user = 'sitkeitamas'): string
+function remote_ssh(string $host, string $remoteCmd, string $user = 'sitkeitamas', int $port = 22): string
 {
     $cmd = sprintf(
-        'ssh -o ConnectTimeout=8 -o BatchMode=yes %s@%s %s 2>/dev/null | awk \'{print $1}\'',
+        'ssh -o ConnectTimeout=8 -o BatchMode=yes -p %d %s@%s %s 2>/dev/null',
+        $port,
         escapeshellarg($user),
         escapeshellarg($host),
-        escapeshellarg('du -sh ' . $path . ' 2>/dev/null')
+        escapeshellarg($remoteCmd)
     );
-    $out = trim(run($cmd));
+    return trim(run($cmd));
+}
+
+function remote_dir_size(string $host, string $path, string $user = 'sitkeitamas', int $port = 22): string
+{
+    $out = remote_ssh($host, 'du -sh ' . escapeshellarg($path) . " 2>/dev/null | awk '{print \$1}'", $user, $port);
+    return $out !== '' ? $out : '—';
+}
+
+function remote_volume_free(string $host, string $user = 'sitkeitamas', int $port = 22): string
+{
+    $out = remote_ssh($host, "df -h /volume1 2>/dev/null | tail -1 | awk '{print \$4\" szabad (\"\$5\" haszn.)\"}'", $user, $port);
     return $out !== '' ? $out : '—';
 }
 
 function process_status(): array
 {
     $ps = run('ps aux');
-    $trigger = str_contains($ps, 'sync_video_trigger');
-    $homes = str_contains($ps, 'sync_homes_trigger');
-    $rsync = [];
+    $videoRsync = [];
+    $homesRsync = [];
     foreach (explode("\n", $ps) as $line) {
-        if (str_contains($line, 'rsync') && str_contains($line, 'dsm2')) {
-            $rsync[] = preg_replace('/\s+/', ' ', trim($line));
+        if (!str_contains($line, 'rsync')) {
+            continue;
+        }
+        if (str_contains($line, 'dsm2') || str_contains($line, '192.168.9.19')) {
+            $videoRsync[] = preg_replace('/\s+/', ' ', trim($line));
+        }
+        if (str_contains($line, '192.168.9.29')) {
+            $homesRsync[] = preg_replace('/\s+/', ' ', trim($line));
         }
     }
     return [
-        'video_trigger' => $trigger,
-        'homes_trigger' => $homes,
-        'rsync' => $rsync,
+        'video_trigger' => str_contains($ps, 'sync_video_trigger'),
+        'homes_trigger' => str_contains($ps, 'sync_homes_trigger'),
+        'video_rsync' => $videoRsync,
+        'homes_rsync' => $homesRsync,
+        'homes_pending' => is_file(HOMES_PENDING_FILE),
     ];
+}
+
+function build_folder_sizes(array $pairs, string $host, int $port): array
+{
+    $sizes = [];
+    foreach ($pairs as $p) {
+        $label = basename(dirname($p['src'])) . '/' . basename($p['src']);
+        $sizes[] = [
+            'label' => $label,
+            'src' => $p['src'],
+            'dest' => $p['dest'],
+            'local' => dir_size($p['src']),
+            'remote' => remote_dir_size($host, $p['dest'], 'sitkeitamas', $port),
+        ];
+    }
+    return $sizes;
 }
 
 function build_status(): array
 {
-    $env = parse_env_file();
-    $host = $env['REMOTE_HOST'] ?? 'dsm2.sitkeitamas.hu';
-    $pairs = folder_pairs();
-    $sizes = [];
-    foreach ($pairs as $p) {
-        $sizes[] = [
-            'src' => $p['src'],
-            'dest' => $p['dest'],
-            'local' => dir_size($p['src']),
-            'remote' => remote_dir_size($host, $p['dest']),
-        ];
-    }
+    $videoEnv = parse_env_file(ENV_FILE);
+    $homesEnv = parse_env_file(HOMES_ENV_FILE);
+    $videoHost = $videoEnv['REMOTE_HOST'] ?? 'dsm2.sitkeitamas.hu';
+    $videoPort = (int)($videoEnv['REMOTE_PORT'] ?? 22);
+    $homesHost = $homesEnv['REMOTE_HOST'] ?? '192.168.9.29';
+    $homesPort = (int)($homesEnv['REMOTE_PORT'] ?? 22);
+
     return [
         'time' => date('Y-m-d H:i:s'),
         'processes' => process_status(),
-        'folders' => $sizes,
-        'env' => $env,
-        'folders_conf' => read_folders_conf(),
-        'video_log' => tail_file(VIDEO_LOG, 35),
+        'video' => [
+            'folders' => build_folder_sizes(folder_pairs_from(read_folders_conf_file(FOLDERS_FILE)), $videoHost, $videoPort),
+            'env' => $videoEnv,
+            'folders_conf' => read_folders_conf_file(FOLDERS_FILE),
+            'remote_disk' => remote_volume_free($videoHost, 'sitkeitamas', $videoPort),
+            'log' => tail_file(VIDEO_LOG, 35),
+        ],
+        'homes' => [
+            'folders' => build_folder_sizes(folder_pairs_from(read_folders_conf_file(HOMES_FOLDERS_FILE)), $homesHost, $homesPort),
+            'env' => $homesEnv,
+            'folders_conf' => read_folders_conf_file(HOMES_FOLDERS_FILE),
+            'remote_disk' => remote_volume_free($homesHost, 'sitkeitamas', $homesPort),
+            'log' => tail_file(HOMES_LOG, 35),
+        ],
         'webcam_log' => tail_file(WEBCAM_LOG, 15),
+        // visszafelé kompatibilitás
+        'folders' => build_folder_sizes(folder_pairs_from(read_folders_conf_file(FOLDERS_FILE)), $videoHost, $videoPort),
+        'env' => $videoEnv,
+        'folders_conf' => read_folders_conf_file(FOLDERS_FILE),
+        'video_log' => tail_file(VIDEO_LOG, 35),
     ];
 }
 
@@ -155,28 +204,48 @@ function backup_file(string $path): void
     }
 }
 
-function save_env(array $in): void
+function save_env_file(string $path, array $in, array $allowed): void
 {
-    $allowed = ['REMOTE_HOST', 'REMOTE_PORT', 'RSYNC_BWLIMIT', 'POLL_INTERVAL_SEC', 'REMOTE_USER'];
-    $current = file_get_contents(ENV_FILE);
+    $current = file_get_contents($path);
     foreach ($allowed as $key) {
         if (!isset($in[$key])) {
             continue;
         }
-        $val = preg_replace('/[^a-zA-Z0-9._-]/', '', (string)$in[$key]);
-        if ($key === 'RSYNC_BWLIMIT' || $key === 'POLL_INTERVAL_SEC' || $key === 'REMOTE_PORT') {
+        $val = (string)$in[$key];
+        if (in_array($key, ['RSYNC_BWLIMIT', 'POLL_INTERVAL_SEC', 'REMOTE_PORT', 'SYNC_HOUR_START', 'SYNC_HOUR_END'], true)) {
             $val = (string)max(0, (int)$in[$key]);
+        } else {
+            $val = preg_replace('/[^a-zA-Z0-9._-]/', '', $val);
         }
         $current = preg_replace('/^' . preg_quote($key, '/') . '=.*/m', $key . '="' . $val . '"', $current);
     }
-    backup_file(ENV_FILE);
-    file_put_contents(ENV_FILE, $current);
+    backup_file($path);
+    file_put_contents($path, $current);
+}
+
+function save_env(array $in): void
+{
+    save_env_file(ENV_FILE, $in, ['REMOTE_HOST', 'REMOTE_PORT', 'RSYNC_BWLIMIT', 'POLL_INTERVAL_SEC', 'REMOTE_USER']);
+}
+
+function save_homes_env(array $in): void
+{
+    save_env_file(HOMES_ENV_FILE, $in, [
+        'REMOTE_HOST', 'REMOTE_PORT', 'RSYNC_BWLIMIT', 'POLL_INTERVAL_SEC',
+        'SYNC_HOUR_START', 'SYNC_HOUR_END', 'REMOTE_USER',
+    ]);
 }
 
 function save_folders(string $text): void
 {
     backup_file(FOLDERS_FILE);
     file_put_contents(FOLDERS_FILE, rtrim($text) . "\n");
+}
+
+function save_homes_folders(string $text): void
+{
+    backup_file(HOMES_FOLDERS_FILE);
+    file_put_contents(HOMES_FOLDERS_FILE, rtrim($text) . "\n");
 }
 
 function run_action(string $action): string
@@ -187,6 +256,7 @@ function run_action(string $action): string
         'stop' => run('bash ' . escapeshellarg($base . '/sync_control.sh') . ' stop'),
         'restart' => run('bash ' . escapeshellarg($base . '/sync_control.sh') . ' restart'),
         'sync_now' => run('bash ' . escapeshellarg($base . '/sync_now.sh') . ' &'),
+        'sync_homes_now' => run('bash ' . escapeshellarg($base . '/sync_homes_now.sh') . ' &'),
         default => 'Ismeretlen művelet',
     };
 }

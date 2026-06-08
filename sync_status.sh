@@ -30,11 +30,16 @@ if [ -f /tmp/sync_homes_trigger.pid ] && kill -0 $(cat /tmp/sync_homes_trigger.p
 else
     echo -n "❌ ÁLL"
 fi
-[ -z "$(ps | grep "rsync" | grep "dsm3" | grep -v "grep")" ] && echo " | 💤 PIHEN" || echo " | 🔄 MÁSOLÁSBAN"
+if ps | grep "rsync" | grep "192.168.9.29" | grep -v "grep" > /dev/null; then
+    echo " | 🔄 MÁSOLÁSBAN"
+else
+    LAST=$(grep "Homes szinkron VÉGE" "$HOME_LOG" | tail -1)
+    [ -z "$LAST" ] && echo " | 💤 PIHEN" || echo " | 💤 PIHEN ($(echo "$LAST" | cut -d']' -f1 | cut -d'[' -f2))"
+fi
 
 echo "------------------------------------------------------"
 echo "SZABAD HELYEK:"
 df -h /volume1 | tail -1 | awk '{print "  - HELYI NAS:  "$4" szabad"}'
 ssh -p 22 sitkeitamas@dsm2.sitkeitamas.hu "df -h /volume1" 2>/dev/null | tail -1 | awk '{print "  - DSM2 (Vid): "$4" szabad"}'
-ssh -p 222 sitkeitamas@dsm3.sitkeitamas.hu "df -h /volume1" 2>/dev/null | tail -1 | awk '{print "  - DSM3 (Hom): "$4" szabad"}'
+ssh -p 22 sitkeitamas@192.168.9.29 "df -h /volume1" 2>/dev/null | tail -1 | awk '{print "  - DSM3 (Hom): "$4" szabad"}'
 echo "======================================================"

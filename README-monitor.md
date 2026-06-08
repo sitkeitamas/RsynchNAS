@@ -20,20 +20,45 @@ Log: `/tmp/sync_monitor.log`
 
 ## Mit tud a felület
 
-- Videó / home trigger fut-e, aktív rsync folyamatok  
-- Mappa méretek: helyi vs DSM2 (`sync_folders.conf` alapján)  
-- `video_sync.log` és `sync_log.txt` utolsó sorai (30 s auto-refresh)  
-- Szerkesztés: `sync_video.env` mezők + `sync_folders.conf`  
-- Gombok: Start / Stop / Restart / Sync most  
-- Mentéskor `.bak.YYYYMMDD-HHMMSS` backup a config fájlokról  
+### DSM2 — videó (naszareti)
+
+- Videó trigger fut-e, aktív videó rsync  
+- Mappa méretek: helyi vs DSM2 (`sync_folders.conf`)  
+- DSM2 szabad tárhely (`df`)  
+- `video_sync.log` utolsó sorai  
+- Szerkesztés: `sync_video.env` + `sync_folders.conf`  
+- Gomb: **Videó sync most**
+
+### DSM3 — homes (naszika · 192.168.9.29)
+
+- Homes trigger fut-e, **pending** változás jelzés  
+- Aktív homes rsync (192.168.9.29 felé)  
+- User `Drive` méretek: helyi vs naszika (`sync_homes_folders.conf`)  
+- Naszika szabad tárhely (`df`) — lassú lehet, ha a naszika terhelve van  
+- `homes_sync.log` utolsó sorai  
+- Szerkesztés: `sync_homes.env` (IP, port, bwlimit, poll, éjszakai ablak) + `sync_homes_folders.conf`  
+- Gomb: **Homes sync most** (éjszakai ablak figyelmen kívül)
+
+### Közös
+
+- **Start / Stop / Restart** — mindkét trigger + monitor  
+- Webcam log (`sync_log.txt`)  
+- Dokumentáció böngésző (`docs.php`) — minden `README*.md`, beleértve a `README-homes-sync.md`-t  
+- Auto-refresh: 30 másodpercenként  
 
 ## Technikai háttér
 
 - PHP 8.2 beépített szerver: `php -S 192.168.5.9:8765`  
-- Fájlok: `~/scripts/sync-monitor/` (`index.php`, `api.php`, `lib.php`, `serve.sh`)  
+- Fájlok: `~/scripts/sync-monitor/` (`index.php`, `api.php`, `lib.php`, `docs.php`, `serve.sh`)  
 - Nem a Web Stationön fut (ott a PHP 502-t ad a `web/` alatt)  
 
 ## Biztonság
 
 Szándékosan nincs jelszó — csak LAN/VPN IP-t engedélyez az `lib.php`.  
 Ne forwardold a 8765-ös portot a routeren.
+
+## Kapcsolódó dokumentáció
+
+- [README-homes-sync.md](README-homes-sync.md) — naszika homes sync részletek  
+- [README-video-sync.md](README-video-sync.md) — videó sync  
+- [README-webcam.md](README-webcam.md) — webcam képek  

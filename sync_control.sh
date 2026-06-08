@@ -7,7 +7,7 @@ stop_sync() {
     echo "Összes szinkron figyelő leállítása..."
     pids=$(ps aux | grep -E "[s]ync_video_trigger|[s]ync_homes_trigger" | awk '{print $2}')
     [[ -n "$pids" ]] && kill $pids 2>/dev/null
-    rsync_pids=$(ps aux | grep "[r]sync.*${REMOTE_HOST:-dsm2}" | awk '{print $2}')
+    rsync_pids=$(ps aux | grep -E "[r]sync.*(dsm2|192\.168\.9\.(19|29))" | awk '{print $2}')
     [[ -n "$rsync_pids" ]] && kill $rsync_pids 2>/dev/null
     rm -f /tmp/sync_video_trigger.pid /tmp/sync_homes_trigger.pid
     [[ -x "${SCRIPT_DIR}/sync-monitor/serve.sh" ]] && bash "${SCRIPT_DIR}/sync-monitor/serve.sh" stop

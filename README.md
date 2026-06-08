@@ -18,8 +18,9 @@ Ez a könyvtár a Budapesti nagy NAS és az edericsi DSM2 (`192.168.9.19` / `dsm
 | Mit akarsz | Hol |
 |------------|-----|
 | **Webes panel** (állapot, beállítás, gombok) | http://192.168.5.9:8765/ (csak LAN/VPN) |
-| **Dokumentáció böngészőben** | http://192.168.5.9:8765/docs.php |
+| **Dokumentáció böngészőben** | http://192.168.5.9:8765/docs.php (videó + homes + webcam) |
 | Videó szinkron részletek | [README-video-sync.md](README-video-sync.md) |
+| Homes → naszika (DSM3) | [README-homes-sync.md](README-homes-sync.md) |
 | Webcam / homepage képek | [README-webcam.md](README-webcam.md) |
 | Monitor webapp | [README-monitor.md](README-monitor.md) |
 
@@ -76,9 +77,12 @@ home-log        # homes_sync.log
 ├── sync_now.sh               # azonnali sync (sync-now alias)
 ├── sync_control.sh           # start/stop/restart (boot task is ezt hívja)
 ├── sync_ederics.sh           # webcam → homepage (Foscam/Reolink)
-├── sync_homes_trigger.sh     # 30 percenként (jelenleg update_web_cameras)
-├── sync_homes_to_dsm3.sh     # vékony wrapper
-├── update_web_cameras.sh     # kamera képek (duplikált logika)
+├── sync_homes.env            # homes: naszika IP, bwlimit, éjszakai ablak
+├── sync_homes_folders.conf   # user Drive párok → 192.168.9.29
+├── sync_homes_to_dsm3.sh     # rsync motor → naszika
+├── sync_homes_trigger.sh     # 30 perc poll + éjszakai másolás
+├── sync_homes_now.sh           # azonnali homes sync
+├── update_web_cameras.sh     # kamera képek (legacy, webcam: sync_ederics.sh)
 ├── sync_status.sh            # terminálos állapot
 ├── video_sync.log            # videó napló
 ├── sync_log.txt              # webcam napló
@@ -91,7 +95,8 @@ home-log        # homes_sync.log
 nasznagy (192.168.5.9)
     → DNS: dsm2.sitkeitamas.hu = 192.168.9.19 (Beryl split-DNS)
     → WireGuard S2S (Beryl BP ↔ Beryl Ederics)
-    → naszareti / DSM2 (192.168.9.19)
+    → naszareti / DSM2 (192.168.9.19)   [videó]
+    → naszika (192.168.9.29)             [homes Drive, közvetlen IP]
 ```
 
 ## Tipikus hibák
