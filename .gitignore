@@ -1,0 +1,16 @@
+# Logok és futás közben keletkező fájlok (ne kerüljenek a NAS-ról véletlenül)
+*.log
+*.log.*
+sync_log.txt
+*.bak.*
+.DS_Store
+
+# Titkok — soha ne commitolj
+.env
+*.pem
+id_rsa
+known_hosts
+
+# IDE
+.idea/
+.vscode/

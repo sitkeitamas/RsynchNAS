@@ -1,0 +1,109 @@
+# RsynchNAS
+
+Budapesti Synology (`nasznagy`) → edericsi DSM2 (`dsm2`) rsync-alapú tükrözés: videó, webcam snapshotok, belső monitor webapp.
+
+**Éles telepítés:** `nasznagy:/volume1/homes/sitkeitamas/scripts/`  
+**Utolsó frissítés:** 2026-06-08
+
+Kapcsolódó hálózat/VPN dokumentáció: [beryl-s2s-vpn](https://github.com/sitkeitamas/beryl-s2s-vpn)
+
+---
+
+# NAS szinkron rendszer — mester dokumentáció
+
+Ez a könyvtár a Budapesti nagy NAS és az edericsi DSM2 (`192.168.9.19` / `dsm2.sitkeitamas.hu`) közötti automatizált tükrözést vezérli.
+
+## Gyors belépők
+
+| Mit akarsz | Hol |
+|------------|-----|
+| **Webes panel** (állapot, beállítás, gombok) | http://192.168.5.9:8765/ (csak LAN/VPN) |
+| **Dokumentáció böngészőben** | http://192.168.5.9:8765/docs.php |
+| Videó szinkron részletek | [README-video-sync.md](README-video-sync.md) |
+| Webcam / homepage képek | [README-webcam.md](README-webcam.md) |
+| Monitor webapp | [README-monitor.md](README-monitor.md) |
+
+## Előfeltétel: DNS
+
+A nasznagy **automatikus DNS-t** használ → elsődleges: `192.168.5.1` (Beryl split-DNS).
+
+Ellenőrzés SSH-ról:
+
+```bash
+cat /etc/resolv.conf          # nameserver 192.168.5.1
+nslookup dsm2.sitkeitamas.hu  # → 192.168.9.19
+```
+
+Ha `8.8.8.8` vagy WAN IP jön vissza, a sync **nem éri el** a DSM2-t.  
+**DSM:** Vezérlőpult → Hálózat → Általános → DNS automatikus (ne kézi Google DNS).
+
+## DSM Feladatütemező — aktuális taskok
+
+| Név | Típus | Mikor | Parancs | User |
+|-----|-------|-------|---------|------|
+| **webcam photos** | ütemezett | 10 percenként | `sync_ederics.sh` | **sitkeitamas** |
+| **folyamatosvideosynch** | boot | rendszerindítás | `sync_control.sh start` | **sitkeitamas** |
+| **chron force** | ütemezett | 03:00 + 15:00 | `sync_video_to_dsm2.sh` | **sitkeitamas** |
+| Task 16 | — | — | *kikapcsolva* (duplikátum) | — |
+
+**Fontos:** a scripteket **mindig `sitkeitamas` userrel** futtasd / állítsd be. Root-nak nincs SSH kulcsa a DSM2-re → néma hiba.
+
+## Gyors parancsok (SSH, aliasok a `~/.bashrc`-ben)
+
+```bash
+sync-start      # figyelők + monitor webapp
+sync-stop       # minden leáll
+sync-restart    # újraindítás
+sync-now        # azonnali videó rsync
+status          # sync_status.sh összefoglaló
+vlog            # video_sync.log utolsó sorai
+vlogf           # video log élőben
+home-log        # homes_sync.log
+```
+
+## Fájlstruktúra
+
+```
+~/scripts/
+├── README.md                 ← ez a fájl
+├── README-video-sync.md
+├── README-webcam.md
+├── README-monitor.md
+├── sync_video.env            # videó: host, bwlimit, poll intervallum
+├── sync_folders.conf         # szinkronizálandó mappa párok (forrás|cél)
+├── sync_video_to_dsm2.sh     # rsync motor → DSM2
+├── sync_video_trigger.sh     # változásfigyelő (inotify vagy poll)
+├── sync_now.sh               # azonnali sync (sync-now alias)
+├── sync_control.sh           # start/stop/restart (boot task is ezt hívja)
+├── sync_ederics.sh           # webcam → homepage (Foscam/Reolink)
+├── sync_homes_trigger.sh     # 30 percenként (jelenleg update_web_cameras)
+├── sync_homes_to_dsm3.sh     # vékony wrapper
+├── update_web_cameras.sh     # kamera képek (duplikált logika)
+├── sync_status.sh            # terminálos állapot
+├── video_sync.log            # videó napló
+├── sync_log.txt              # webcam napló
+└── sync-monitor/             # belső web panel (PHP)
+```
+
+## Hálózati útvonal (röviden)
+
+```
+nasznagy (192.168.5.9)
+    → DNS: dsm2.sitkeitamas.hu = 192.168.9.19 (Beryl split-DNS)
+    → WireGuard S2S (Beryl BP ↔ Beryl Ederics)
+    → naszareti / DSM2 (192.168.9.19)
+```
+
+## Tipikus hibák
+
+| Tünet | Ok | Megoldás |
+|-------|-----|----------|
+| Log csak „KÉSZ”, nincs másolás | root futtatja a taskot | User → sitkeitamas |
+| SSH timeout ~6 perc | DNS → WAN IP | DNS → Beryl (192.168.5.1) |
+| `inotifywait: command not found` | nincs telepítve | poll mód megy (120 s); opcionális Entware |
+| `video_sync.log` nem frissül | root + `$HOME` útvonal | sitkeitamas user + abszolút útvonalak (javítva) |
+| Homepage képek régiek | webcam task root volt | sitkeitamas user (javítva 2026-06-08) |
+
+## Kapcsolódó dokumentáció (git)
+
+A `beryl-s2s-vpn` repóban: hálózat, DNS, topológia → `docs/dns-split.md`, `docs/topology.md`.
