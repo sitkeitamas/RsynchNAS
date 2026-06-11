@@ -2,6 +2,7 @@
 # Belső sync monitor — PHP beépített szerver (csak LAN IP)
 DIR="/volume1/homes/sitkeitamas/scripts/sync-monitor"
 HOST="192.168.5.9"
+DNS_NAME="nas-sync.lan"
 PORT="8765"
 PIDFILE="/tmp/sync_monitor.pid"
 PHP="/usr/local/bin/php82"
@@ -36,7 +37,7 @@ case "${1:-start}" in
       rm -f "$PIDFILE"
       exit 1
     fi
-    echo "Sync monitor: http://${HOST}:${PORT}/ (PID $(cat "$PIDFILE"))"
+    echo "Sync monitor: http://${DNS_NAME}:${PORT}/ (http://${HOST}:${PORT}/) PID $(cat "$PIDFILE")"
     ;;
   stop)
     [[ -f "$PIDFILE" ]] && kill "$(cat "$PIDFILE")" 2>/dev/null
@@ -49,7 +50,7 @@ case "${1:-start}" in
     ;;
   status)
     if [[ -f "$PIDFILE" ]] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
-      echo "Fut: http://${HOST}:${PORT}/ (PID $(cat "$PIDFILE"))"
+      echo "Fut: http://${DNS_NAME}:${PORT}/ (PID $(cat "$PIDFILE"))"
     else
       echo "Nem fut."
     fi

@@ -17,7 +17,7 @@ Ez a könyvtár a Budapesti nagy NAS és az edericsi DSM2 (`192.168.9.19` / `dsm
 
 | Mit akarsz | Hol |
 |------------|-----|
-| **Webes panel** (állapot, beállítás, gombok) | http://192.168.5.9:8765/ (csak LAN/VPN) |
+| **Webes panel** (állapot, beállítás, gombok) | http://nas-sync.lan:8765/ (csak LAN/VPN) |
 | **Dokumentáció böngészőben** | http://192.168.5.9:8765/docs.php (videó + homes + webcam) |
 | Videó szinkron részletek | [README-video-sync.md](README-video-sync.md) |
 | Homes → naszika (DSM3) | [README-homes-sync.md](README-homes-sync.md) |

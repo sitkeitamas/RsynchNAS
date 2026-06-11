@@ -1,8 +1,9 @@
 # Sync Monitor — belső web panel
 
-**URL:** http://192.168.5.9:8765/  
-**Dokumentáció:** http://192.168.5.9:8765/docs.php (a `~/scripts/README*.md` fájlok)  
-**Elérés:** csak belső hálózat (192.168.x, 10.x, 172.16–31.x, localhost). Kívülről 403.
+**URL:** http://nas-sync.lan:8765/ (vagy http://192.168.5.9:8765/)  
+**Dokumentáció:** http://nas-sync.lan:8765/docs.php  
+**DNS:** `nas-sync.lan` → `192.168.5.9` — mindkét Beryl dnsmasq (lásd [beryl-s2s-vpn dns-split](https://github.com/sitkeitamas/beryl-s2s-vpn/blob/main/docs/dns-split.md))  
+**Elérés:** csak belső hálózat / VPN (192.168.x, 10.x, 172.16–31.x). Kívülről 403; nincs publikus DNS.
 
 ## Indítás / leállítás
 
