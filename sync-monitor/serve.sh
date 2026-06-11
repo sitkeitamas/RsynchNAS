@@ -8,16 +8,32 @@ PIDFILE="/tmp/sync_monitor.pid"
 PHP="/usr/local/bin/php82"
 [[ -x "$PHP" ]] || PHP="/usr/bin/php"
 
-kill_wrong_listener() {
-  local owner
-  owner=$(netstat -tlnp 2>/dev/null | awk -v p=":${PORT} " '$4 ~ p {print $7}' | head -1)
-  if [[ -n "$owner" && "$owner" != *php* ]]; then
-    local pid="${owner%%/*}"
-    echo "Figyelmeztetés: ${PORT} foglalt (${owner}) — leállítás"
-    kill "$pid" 2>/dev/null
-    sleep 1
-    kill -9 "$pid" 2>/dev/null
-  fi
+port_hex() { printf '%04X' "$PORT"; }
+
+# Synology netstat gyakran rossz PID-et mutat (pl. sync bash a PHP portján).
+# Socket inode alapján csak php-t ölünk, vagy árva bash fd-t zárunk rsync nélkül.
+free_port() {
+  local hex port_pat inode pid comm
+  hex=$(port_hex)
+  port_pat=$(echo "$hex" | sed 's/^\(..\)\(..\)$/\2\1/')   # LE: 223D for 8765
+  inode=$(awk -v p=":${port_pat} " '$2 ~ p && $4 == "0A" {print $10; exit}' /proc/net/tcp 2>/dev/null)
+  [[ -z "$inode" ]] && return 0
+
+  for fd in /proc/[0-9]*/fd/[0-9]*; do
+    [[ "$(readlink "$fd" 2>/dev/null)" == "socket:[$inode]" ]] || continue
+    pid=$(echo "$fd" | cut -d/ -f3)
+    comm=$(ps -p "$pid" -o comm= 2>/dev/null || true)
+    if [[ "$comm" == php* ]]; then
+      kill "$pid" 2>/dev/null; sleep 1; kill -9 "$pid" 2>/dev/null
+    elif [[ "$comm" == bash && -z "$(pgrep -P "$pid" rsync 2>/dev/null)" ]]; then
+      echo "Figyelmeztetés: árva bash foglalja a ${PORT}-öt (PID ${pid}) — leállítás"
+      kill "$pid" 2>/dev/null; sleep 1; kill -9 "$pid" 2>/dev/null
+    elif [[ -n "$comm" ]]; then
+      echo "HIBA: ${PORT} foglalt (PID ${pid}, ${comm}) — futó sync? Várj vagy állítsd le a homes rsync-et."
+      return 1
+    fi
+  done
+  return 0
 }
 
 case "${1:-start}" in
@@ -27,7 +43,7 @@ case "${1:-start}" in
       echo "Sync monitor már fut (PID $(cat "$PIDFILE"))"
       exit 0
     fi
-    kill_wrong_listener
+    free_port || exit 1
     cd "$DIR" || exit 1
     setsid "$PHP" -S "${HOST}:${PORT}" -t "$DIR" >> /tmp/sync_monitor.log 2>&1 &
     echo $! > "$PIDFILE"
@@ -44,7 +60,7 @@ case "${1:-start}" in
     pkill -f "php.*${HOST}:${PORT}" 2>/dev/null
     sleep 1
     pkill -9 -f "php.*${HOST}:${PORT}" 2>/dev/null
-    kill_wrong_listener
+    free_port || true
     rm -f "$PIDFILE"
     echo "Leállítva."
     ;;

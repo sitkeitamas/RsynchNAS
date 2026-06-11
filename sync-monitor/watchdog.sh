@@ -11,8 +11,19 @@ DISK_EVERY="${WATCHDOG_DISK_EVERY_SEC:-600}"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG"; }
 
-port_owner() {
-  netstat -tlnp 2>/dev/null | awk -v p=":${PORT} " '$4 ~ p {print $7}' | head -1
+php_on_port() {
+  local hex port_pat inode pid comm
+  hex=$(printf '%04X' "$PORT")
+  port_pat=$(echo "$hex" | sed 's/^\(..\)\(..\)$/\2\1/')
+  inode=$(awk -v p=":${port_pat} " '$2 ~ p && $4 == "0A" {print $10; exit}' /proc/net/tcp 2>/dev/null)
+  [[ -z "$inode" ]] && return 1
+  for fd in /proc/[0-9]*/fd/[0-9]*; do
+    [[ "$(readlink "$fd" 2>/dev/null)" == "socket:[$inode]" ]] || continue
+    pid=$(echo "$fd" | cut -d/ -f3)
+    comm=$(ps -p "$pid" -o comm= 2>/dev/null || true)
+    [[ "$comm" == php* ]] && return 0
+  done
+  return 1
 }
 
 health_ok() {
@@ -27,10 +38,9 @@ php_alive() {
 }
 
 ensure_monitor() {
-  local owner reason=""
-  owner=$(port_owner)
-  if [[ -n "$owner" && "$owner" != *php* ]]; then
-    reason="rossz folyamat a ${PORT}-ön: ${owner}"
+  local reason=""
+  if netstat -tln 2>/dev/null | grep -q ":${PORT} " && ! php_on_port; then
+    reason="a ${PORT} foglalt, de nem PHP (árva socket / sync ütközés)"
   elif ! php_alive; then
     reason="PHP nem fut (PID file)"
   elif ! health_ok; then
