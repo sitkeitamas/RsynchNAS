@@ -231,9 +231,15 @@ async function refresh() {
   document.getElementById('video-log').textContent = v.log;
 
   const h = d.homes;
-  document.getElementById('homes-proc').innerHTML = p.homes_rsync.length
-    ? '<span class="badge on">rsync fut</span><pre style="margin-top:.5rem">'+p.homes_rsync.join('\n')+'</pre>'
-    : '<span class="badge off">nincs aktív rsync</span>';
+  if (p.homes_rsync.length) {
+    document.getElementById('homes-proc').innerHTML =
+      '<span class="badge on">rsync fut</span><pre style="margin-top:.5rem">'+p.homes_rsync.join('\n')+'</pre>';
+  } else if (p.homes_sync) {
+    document.getElementById('homes-proc').innerHTML =
+      '<span class="badge on">homes sync fut</span> <span class="muted">(fájllista / első pár…)</span>';
+  } else {
+    document.getElementById('homes-proc').innerHTML = '<span class="badge off">nincs aktív sync</span>';
+  }
   document.getElementById('homes-disk').textContent = 'Naszika tár: ' + (h.remote_disk || '—');
   document.getElementById('homes-sizes').innerHTML = folderTable(h.folders, 'naszika');
   document.getElementById('homes-log').textContent = h.log;

@@ -161,13 +161,14 @@ function process_status(): array
         if (str_contains($line, 'dsm2') || str_contains($line, '192.168.9.19')) {
             $videoRsync[] = preg_replace('/\s+/', ' ', trim($line));
         }
-        if (str_contains($line, '192.168.9.29')) {
+        if (str_contains($line, '192.168.9.29') || str_contains($line, 'NetBackup/homes')) {
             $homesRsync[] = preg_replace('/\s+/', ' ', trim($line));
         }
     }
     return [
         'video_trigger' => str_contains($ps, 'sync_video_trigger'),
         'homes_trigger' => str_contains($ps, 'sync_homes_trigger'),
+        'homes_sync' => str_contains($ps, 'sync_homes_to_dsm3'),
         'video_rsync' => $videoRsync,
         'homes_rsync' => $homesRsync,
         'homes_pending' => is_file(HOMES_PENDING_FILE),
@@ -388,7 +389,8 @@ function build_jobs_summary(array $processes): array
         static fn(string $line): string => preg_replace('/^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] /', '', $line),
         array_slice($hErrorLines, -5)
     );
-    $hRunning = count($processes['homes_rsync'] ?? []) > 0;
+    $hRunning = count($processes['homes_rsync'] ?? []) > 0
+        || !empty($processes['homes_sync']);
     $hStatus = 'ok';
     $hLabel = 'Sikeres';
     if ($hRunning) {
@@ -403,8 +405,8 @@ function build_jobs_summary(array $processes): array
     }
     $hHints = [];
     foreach ($hErrors as $err) {
-        if (str_contains($err, 'jogosultság') || str_contains($err, 'ACL')) {
-            $hHints[] = 'DSM3 ACL: sudo bash ~/fix_homes_permissions_dsm3.sh a naszikán';
+        if (str_contains($err, 'jogosultság') || str_contains($err, 'ACL') || str_contains($err, 'NetBackup')) {
+            $hHints[] = 'NetBackup/homes írási jog: touch teszt a naszikán (sitkeitamas tulajdon)';
         } elseif (str_contains($err, 'rsync szolgáltatás')) {
             $hHints[] = 'Naszika: Vezérlőpult → Fájlszolgáltatások → rsync engedélyezése';
         } elseif (str_contains($err, 'tamas.sitkei/Drive')) {

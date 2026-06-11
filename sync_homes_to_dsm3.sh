@@ -10,6 +10,13 @@ HOMES_TRANSPORT="${HOMES_TRANSPORT:-rsync}"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"; }
 
+LOCK_FILE="${PID_DIR}/sync_homes.lock"
+HOMES_SYNC_PID_FILE="${PID_DIR}/sync_homes_sync.pid"
+
+homes_rsync_running() {
+    ps aux 2>/dev/null | grep -E "[r]sync .*${REMOTE_USER}@${REMOTE_HOST}:.*/volume1/NetBackup/homes/" >/dev/null 2>&1
+}
+
 in_sync_window() {
     local h=$((10#$(date +%H)))
     local start=$((10#${SYNC_HOUR_START:-1}))
@@ -53,18 +60,22 @@ run_rsync_pair() {
     [[ -z "$src" || -z "$dest" ]] && return 0
     [[ ! -d "$src" ]] && { log "HIBA: forrás nem létezik: $src"; return 1; }
 
-    local result
+    local user result tmplog
+    user=$(basename "$(dirname "$src")")
+    log "INDUL pár: ${user} (${src} -> ${REMOTE_HOST}:${dest})"
+    tmplog=$(mktemp)
     # -a mellé --no-perms/--no-owner/--no-group: a forrás Drive drwxr-xr-x (755) ne írja
     # felül a naszikán beállított sitkeitamas írási jogot (DSM ACL / File Station).
-    result=$(rsync -avz --delete --force --ignore-errors \
+    # tee: a log élőben frissül a panelen (nagy mappánál percekig is tarthat egy pár).
+    rsync -avz --delete --force --ignore-errors \
         --no-perms --no-owner --no-group \
         --bwlimit="${RSYNC_BWLIMIT}" \
         --exclude='@eaDir/' --exclude='@SynologyDrive/' --exclude='#recycle/' \
         --exclude='.SynologyWorkingDirectory/' --exclude='desktop.ini' --exclude='.DS_Store' \
         -e "ssh ${SSH_OPTS} -p ${REMOTE_PORT}" \
-        "${src}/" "${REMOTE_USER}@${REMOTE_HOST}:${dest}/" 2>&1) || true
-
-    echo "$result" >> "$LOG_FILE"
+        "${src}/" "${REMOTE_USER}@${REMOTE_HOST}:${dest}/" 2>&1 | tee -a "$LOG_FILE" "$tmplog" || true
+    result=$(cat "$tmplog")
+    rm -f "$tmplog"
     if echo "$result" | grep -q "rsync service is no running"; then
         log "HIBA pár: ${src} -> ${REMOTE_HOST}:${dest} | DSM3 rsync szolgáltatás ki"
         return 1
@@ -142,6 +153,22 @@ if [[ "${SYNC_HOMES_FORCE:-}" != "1" ]] && ! in_sync_window; then
     log "Kihagyva: nincs éjszakai ablak (${SYNC_HOUR_START}:00–${SYNC_HOUR_END}:00) — SYNC_HOMES_FORCE=1 a kényszerítéshez"
     exit 0
 fi
+
+if homes_rsync_running; then
+    log "Kihagyva: homes rsync már fut a háttérben"
+    exit 0
+fi
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+    log "Kihagyva: homes szinkron már fut (zárolás)"
+    exit 0
+fi
+if homes_rsync_running; then
+    log "Kihagyva: homes rsync már fut (zárolás után)"
+    exit 0
+fi
+echo $$ > "$HOMES_SYNC_PID_FILE"
+trap 'rm -f "$HOMES_SYNC_PID_FILE"' EXIT
 
 TRANSPORT=$(resolve_transport)
 START_TIME=$(date +%s)
