@@ -46,7 +46,17 @@ latest_mtime() {
     find "$@" -type f ! -path '*/@eaDir/*' -printf '%T@\n' 2>/dev/null | sort -n | tail -1
 }
 
-run_sync() { bash "$SYNC_SCRIPT"; }
+run_sync() {
+    if video_rsync_running 2>/dev/null || ! flock -n "${PID_DIR}/sync_video.lock" true 2>/dev/null; then
+        log "Videó sync kihagyva — már fut"
+        return 0
+    fi
+    bash "$SYNC_SCRIPT"
+}
+
+video_rsync_running() {
+    ps aux 2>/dev/null | grep -E "[r]sync .*${REMOTE_USER}@${REMOTE_HOST}:.*/volume1/video/" >/dev/null 2>&1
+}
 
 WATCH_DIRS=()
 while IFS= read -r _d; do

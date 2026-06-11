@@ -54,7 +54,10 @@ run_rsync_pair() {
     [[ ! -d "$src" ]] && { log "HIBA: forrás nem létezik: $src"; return 1; }
 
     local result
+    # -a mellé --no-perms/--no-owner/--no-group: a forrás Drive drwxr-xr-x (755) ne írja
+    # felül a naszikán beállított sitkeitamas írási jogot (DSM ACL / File Station).
     result=$(rsync -avz --delete --force --ignore-errors \
+        --no-perms --no-owner --no-group \
         --bwlimit="${RSYNC_BWLIMIT}" \
         --exclude='@eaDir/' --exclude='@SynologyDrive/' --exclude='#recycle/' \
         --exclude='.SynologyWorkingDirectory/' --exclude='desktop.ini' --exclude='.DS_Store' \
@@ -62,8 +65,12 @@ run_rsync_pair() {
         "${src}/" "${REMOTE_USER}@${REMOTE_HOST}:${dest}/" 2>&1) || true
 
     echo "$result" >> "$LOG_FILE"
-    if echo "$result" | grep -qE "rsync service is no running|Permission denied, please try again"; then
-        log "HIBA pár: ${src} -> ${REMOTE_HOST}:${dest} | DSM3 rsync nincs bekapcsolva"
+    if echo "$result" | grep -q "rsync service is no running"; then
+        log "HIBA pár: ${src} -> ${REMOTE_HOST}:${dest} | DSM3 rsync szolgáltatás ki"
+        return 1
+    fi
+    if echo "$result" | grep -qE "Permission denied \(13\)|Operation not permitted \(1\)|rsync error: some files"; then
+        log "HIBA pár: ${src} -> ${REMOTE_HOST}:${dest} | jogosultság (cél: NetBackup/homes — ellenőrizd írás: touch)"
         return 1
     fi
 

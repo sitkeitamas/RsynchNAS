@@ -5,7 +5,31 @@ SCRIPT_DIR="/volume1/homes/sitkeitamas/scripts"
 # shellcheck source=/dev/null
 source "${SCRIPT_DIR}/sync_video.env"
 
+LOCK_FILE="${PID_DIR}/sync_video.lock"
+SYNC_PID_FILE="${PID_DIR}/sync_video_sync.pid"
+
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"; }
+
+video_rsync_running() {
+    ps aux 2>/dev/null | grep -E "[r]sync .*${REMOTE_USER}@${REMOTE_HOST}:.*/volume1/video/" >/dev/null 2>&1
+}
+
+# Egyetlen példány: futó rsync + flock (cron/trigger/sync_now párhuzamos hívás ellen)
+if video_rsync_running; then
+    log "Kihagyva: videó rsync már fut a háttérben"
+    exit 0
+fi
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+    log "Kihagyva: videó szinkron már fut (zárolás)"
+    exit 0
+fi
+if video_rsync_running; then
+    log "Kihagyva: videó rsync már fut (zárolás után)"
+    exit 0
+fi
+echo $$ > "$SYNC_PID_FILE"
+trap 'rm -f "$SYNC_PID_FILE"' EXIT
 
 run_rsync_pair() {
     local src="$1" dest="$2"

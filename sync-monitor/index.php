@@ -9,7 +9,7 @@ deny_if_external();
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>NAS Sync Monitor</title>
   <style>
-    :root { --bg:#1a1d23; --card:#252a33; --text:#e8eaed; --muted:#9aa0a6; --accent:#6ba3ff; --homes:#c9a227; --ok:#5bd18a; --warn:#f0b429; }
+    :root { --bg:#1a1d23; --card:#252a33; --text:#e8eaed; --muted:#9aa0a6; --accent:#6ba3ff; --homes:#c9a227; --ok:#5bd18a; --warn:#f0b429; --err:#f07178; }
     * { box-sizing: border-box; }
     body { font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 1rem 1.5rem 2rem; }
     h1 { font-size: 1.35rem; margin: 0 0 .25rem; }
@@ -36,12 +36,37 @@ deny_if_external();
     td, th { text-align: left; padding: .35rem .25rem; border-bottom: 1px solid #333; }
     #msg { margin: .75rem 0; min-height: 1.2rem; color: var(--ok); font-size: .9rem; }
     .disk { font-size: .82rem; color: var(--muted); margin-top: .35rem; }
+    .jobs-grid { display: grid; gap: .85rem; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); margin-bottom: 1.5rem; }
+    .job-card { background: var(--card); border-radius: 10px; padding: .9rem 1rem; border-left: 4px solid #3a4048; }
+    .job-card.st-ok { border-left-color: var(--ok); }
+    .job-card.st-running { border-left-color: var(--accent); }
+    .job-card.st-partial, .job-card.st-warn { border-left-color: var(--warn); }
+    .job-card.st-waiting { border-left-color: #8a8f98; }
+    .job-card.st-error { border-left-color: var(--err); }
+    .job-card h2 { font-size: .92rem; margin: 0 0 .55rem; display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+    .job-card h2 span.title { color: var(--text); font-weight: 600; }
+    .st-badge { font-size: .72rem; font-weight: 700; padding: .2rem .5rem; border-radius: 4px; text-transform: uppercase; letter-spacing: .03em; white-space: nowrap; }
+    .st-badge.ok { background: #1e3d2f; color: var(--ok); }
+    .st-badge.running { background: #1e2d3d; color: var(--accent); }
+    .st-badge.partial, .st-badge.warn { background: #3d351e; color: var(--warn); }
+    .job-card.st-warn .st-badge.warn { background: #3d2a1e; }
+    .st-badge.waiting { background: #2a2d33; color: #b0b5bc; }
+    .st-badge.error { background: #3d1e1e; color: var(--err); }
+    .st-badge.unknown { background: #2a2d33; color: var(--muted); }
+    .job-row { font-size: .8rem; margin: .3rem 0; line-height: 1.4; }
+    .job-row strong { color: var(--muted); font-weight: 600; }
+    .job-errors { margin: .45rem 0 0; padding: .45rem .55rem; background: #16191f; border-radius: 6px; font-size: .72rem; color: #f0b0b0; }
+    .job-hints { margin: .35rem 0 0; padding: 0; list-style: none; font-size: .72rem; color: var(--warn); }
+    .job-hints li::before { content: '→ '; }
   </style>
 </head>
 <body>
   <h1>NAS Sync Monitor</h1>
   <p class="sub">Belső panel · <?= htmlspecialchars(BIND_HOST . ':' . BIND_PORT) ?> · csak LAN/VPN · <a href="docs.php" style="color:var(--accent)">Dokumentáció</a></p>
   <div id="msg"></div>
+
+  <h3>Áttekintés — jobok</h3>
+  <div id="jobs-dashboard" class="jobs-grid">Betöltés…</div>
 
   <div class="grid">
     <div class="card">
@@ -146,6 +171,29 @@ deny_if_external();
 <script>
 const msg = (t, ok=true) => { const el = document.getElementById('msg'); el.style.color = ok ? 'var(--ok)' : 'var(--warn)'; el.textContent = t; };
 
+function renderJobs(jobs) {
+  if (!jobs || !jobs.length) {
+    document.getElementById('jobs-dashboard').innerHTML = '<div class="job-card">Nincs job adat</div>';
+    return;
+  }
+  document.getElementById('jobs-dashboard').innerHTML = jobs.map(j => {
+    const st = j.status || 'unknown';
+    let html = `<div class="job-card st-${st}"><h2><span class="title">${j.name}</span><span class="st-badge ${st}">${j.status_label || st}</span></h2>`;
+    html += `<div class="job-row"><strong>Utolsó futás:</strong> ${j.last_start || '—'}`;
+    if (j.last_end) html += ` → ${j.last_end}`;
+    html += `</div>`;
+    html += `<div class="job-row"><strong>Időtartam:</strong> ${j.duration_human || '—'}</div>`;
+    html += `<div class="job-row"><strong>Következő:</strong> ${j.next_run || '—'}</div>`;
+    if (j.errors && j.errors.length) {
+      html += `<div class="job-errors">${j.errors.map(e => '⚠ ' + e).join('<br>')}</div>`;
+    }
+    if (j.hints && j.hints.length) {
+      html += '<ul class="job-hints">' + j.hints.map(h => `<li>${h}</li>`).join('') + '</ul>';
+    }
+    return html + '</div>';
+  }).join('');
+}
+
 function folderTable(folders, remoteLabel) {
   let tbl = `<table><tr><th>User</th><th>Helyi</th><th>${remoteLabel}</th></tr>`;
   folders.forEach(f => {
@@ -166,6 +214,7 @@ async function refresh() {
   const r = await fetch('api.php?action=status', { signal: ctrl.signal });
   clearTimeout(t);
   const d = await r.json();
+  renderJobs(d.jobs);
   const p = d.processes;
   document.getElementById('status-proc').innerHTML = `
     <div>Videó trigger: <span class="badge ${p.video_trigger?'on':'off'}">${p.video_trigger?'fut':'áll'}</span></div>

@@ -3,7 +3,7 @@
 Budapesti Synology (`nasznagy`) → edericsi DSM2 (`dsm2`) rsync-alapú tükrözés: videó, webcam snapshotok, belső monitor webapp.
 
 **Éles telepítés:** `nasznagy:/volume1/homes/sitkeitamas/scripts/`  
-**Utolsó frissítés:** 2026-06-08 (homes rsync előfeltétel, teljes videó mirror, tar fallback)
+**Utolsó frissítés:** 2026-06-11 (homes NetBackup cél, kezdeti feltöltés kész, éjszakai sync ellenőrizve)
 
 Kapcsolódó hálózat/VPN dokumentáció: [beryl-s2s-vpn](https://github.com/sitkeitamas/beryl-s2s-vpn)
 
@@ -115,14 +115,20 @@ nasznagy (192.168.5.9)
 | Videó rossz mappába megy | `sync_folders.conf` elírás | Egy sor: `/volume1/video\|/volume1/video` |
 | Env/conf változás „nem érvényesül” | Futó rsync a régi paraméterekkel | `sync_now.sh` / `sync_homes_now.sh` / restart |
 
-## Legfrissebb felismerések (2026-06-08)
+## Legfrissebb felismerések
 
-### Homes → naszika (DSM3)
+### Homes → naszika (DSM3) — 2026-06-11
+
+- **Cél:** `/volume1/NetBackup/homes/<user>/` (nem `homes/<user>/Drive`) — ACL problémák elkerülése.
+- **Kezdeti feltöltés kész:** helyi migráció naszikán + hálózati sync; `rsync -ani` dry-run: 0 eltérő fájl (`@eaDir` nélkül).
+- **Éjszakai sync:** ~2 perc normális inkrementális futás, ha az adat már szinkronban van (log `méret` ≠ `sent` bájtok).
+- Részletek: [README-homes-sync.md](README-homes-sync.md#üzemeltetési-állapot-2026-06-11)
+
+### Homes → naszika — korábbi (2026-06-08)
 
 - SSH kulcs rendben, de **rsync-over-SSH csak bekapcsolt rsync szolgáltatással** működik a cél NAS-on (873/tcp).
 - Hibaüzenet félrevezető: „Permission denied” — nem fájl-jog, hanem kikapcsolt rsync.
 - `HOMES_TRANSPORT=auto`: rsync ha elérhető, különben tar/SSH fallback (nincs bwlimit, lassú).
-- Új user: `tamas.sitkei.jr`; teszt scriptek: `sync_homes_test_now.sh`, `sync_homes_after_test.sh`.
 - nasznagy (x86_64) ↔ naszika (aarch64): architektúra különbözik, rsync binárist nem lehet átmásolni.
 
 ### Videó → DSM2

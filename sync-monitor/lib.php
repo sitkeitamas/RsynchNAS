@@ -154,6 +154,10 @@ function process_status(): array
         if ($line === '' || !str_contains($line, 'rsync')) {
             continue;
         }
+        // ssh gyerek: „rsync --server …” — nem külön sync példány
+        if (str_contains($line, 'rsync --server')) {
+            continue;
+        }
         if (str_contains($line, 'dsm2') || str_contains($line, '192.168.9.19')) {
             $videoRsync[] = preg_replace('/\s+/', ' ', trim($line));
         }
@@ -205,6 +209,273 @@ function build_folder_sizes(array $pairs, string $host, int $port): array
     return $sizes;
 }
 
+function format_duration(int $seconds): string
+{
+    if ($seconds < 60) {
+        return $seconds . ' mp';
+    }
+    if ($seconds < 3600) {
+        return intdiv($seconds, 60) . ' perc ' . ($seconds % 60) . ' mp';
+    }
+    $h = intdiv($seconds, 3600);
+    $m = intdiv($seconds % 3600, 60);
+    return $h . ' óra ' . $m . ' perc';
+}
+
+function next_daily_at(int $hour, int $minute = 0): string
+{
+    $now = time();
+    $target = mktime($hour, $minute, 0, (int)date('n'), (int)date('j'), (int)date('Y'));
+    if ($target <= $now) {
+        $target = mktime($hour, $minute, 0, (int)date('n'), (int)date('j') + 1, (int)date('Y'));
+    }
+    return date('Y-m-d H:i', $target);
+}
+
+function next_homes_run_label(int $start, int $end, bool $pending): string
+{
+    $h = (int)date('G');
+    if ($h >= $start && $h < $end) {
+        return $pending ? 'várakozás a trigger pollra (max ' . intdiv((int)(parse_env_file(HOMES_ENV_FILE)['POLL_INTERVAL_SEC'] ?? 1800), 60) . ' perc)' : 'éjszakai ablakban — változáskor';
+    }
+    if ($pending) {
+        return next_daily_at($start) . ' (pending változás vár)';
+    }
+    return next_daily_at($start) . ' (éjszakai ablak, ha van változás)';
+}
+
+/** @return list<string> */
+function read_log_lines(string $path, int $maxLines = 400): array
+{
+    if (!is_readable($path)) {
+        return [];
+    }
+    $lines = file($path, FILE_IGNORE_NEW_LINES);
+    if ($lines === false) {
+        return [];
+    }
+    return array_slice($lines, -$maxLines);
+}
+
+function log_last_match(string $path, string $pattern, ?string $mustAlsoContain = null): ?string
+{
+    if (!is_readable($path)) {
+        return null;
+    }
+    $line = trim(run(
+        'grep -e ' . escapeshellarg($pattern) . ' ' . escapeshellarg($path) . ' 2>/dev/null | tail -1',
+        20
+    ));
+    if ($line === '') {
+        return null;
+    }
+    if ($mustAlsoContain !== null && !str_contains($line, $mustAlsoContain)) {
+        return null;
+    }
+    return $line;
+}
+
+/** @return list<string> */
+function log_grep_tail(string $path, string $fixedPattern, int $count = 5): array
+{
+    if (!is_readable($path)) {
+        return [];
+    }
+    $out = run(
+        'grep -e ' . escapeshellarg($fixedPattern) . ' ' . escapeshellarg($path) . ' 2>/dev/null | tail -' . max(1, $count),
+        20
+    );
+    if ($out === '') {
+        return [];
+    }
+    return array_values(array_filter(array_map('trim', explode("\n", $out))));
+}
+
+/** @param list<string> $lines */
+function last_line_matching(array $lines, string $pattern): ?string
+{
+    for ($i = count($lines) - 1; $i >= 0; $i--) {
+        if (preg_match($pattern, $lines[$i])) {
+            return $lines[$i];
+        }
+    }
+    return null;
+}
+
+function parse_ts(?string $line): ?string
+{
+    if ($line === null || !preg_match('/^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]/', $line, $m)) {
+        return null;
+    }
+    return $m[1];
+}
+
+function build_jobs_summary(array $processes): array
+{
+    $videoEnv = parse_env_file(ENV_FILE);
+    $homesEnv = parse_env_file(HOMES_ENV_FILE);
+    $homesStart = (int)($homesEnv['SYNC_HOUR_START'] ?? 1);
+    $homesEnd = (int)($homesEnv['SYNC_HOUR_END'] ?? 6);
+    $videoPoll = (int)($videoEnv['POLL_INTERVAL_SEC'] ?? 120);
+    $homesPending = (bool)($processes['homes_pending'] ?? false);
+
+    $jobs = [];
+
+    // --- Videó → DSM2 ---
+    $vStart = log_last_match(VIDEO_LOG, '--- Szinkron INDUL ---');
+    $vEnd = log_last_match(VIDEO_LOG, 'mp ---', 'Szinkron');
+    $vStartTs = parse_ts($vStart);
+    $vDuration = null;
+    if ($vEnd && preg_match('/össz idő: (\d+) mp/', $vEnd, $m)) {
+        $vDuration = (int)$m[1];
+    }
+    $vRunning = count($processes['video_rsync'] ?? []) > 0;
+    $vDuplicate = count($processes['video_rsync'] ?? []) > 1;
+    $vStatus = 'unknown';
+    $vLabel = 'Ismeretlen';
+    $vHints = [];
+    if ($vRunning) {
+        $vStatus = $vDuplicate ? 'warn' : 'running';
+        $vLabel = $vDuplicate ? 'Fut (dupla rsync!)' : 'Fut';
+        if ($vDuplicate) {
+            $vHints[] = 'Két videó rsync fut egyszerre — egyiket érdemes leállítani (sync_control restart).';
+        }
+        $vHints[] = 'Nagy sync alatt a log csak a végén frissül — ez normális.';
+    } elseif ($vEnd && $vStartTs && ($vEndTs = parse_ts($vEnd)) && $vEndTs >= $vStartTs) {
+        $vStatus = 'ok';
+        $vLabel = 'Sikeres (utolsó kör)';
+    } elseif ($vStartTs) {
+        $vStatus = 'error';
+        $vLabel = 'Megszakadt?';
+        $vHints[] = 'INDUL van, de nincs VÉGE — ellenőrizd: ps aux | grep rsync | grep video';
+    }
+    $vNext = 'Változáskor (poll ' . $videoPoll . ' s) · cron: ma/holnap 03:00 és ' . next_daily_at(15);
+    $vEndTs = parse_ts($vEnd);
+    $vShowEnd = (!$vRunning && $vEndTs && $vStartTs && $vEndTs >= $vStartTs) ? $vEndTs : null;
+    $jobs[] = [
+        'id' => 'video',
+        'name' => 'Videó → DSM2',
+        'status' => $vStatus,
+        'status_label' => $vLabel,
+        'last_start' => $vStartTs,
+        'last_end' => $vShowEnd,
+        'duration_sec' => $vRunning ? null : $vDuration,
+        'duration_human' => $vRunning ? 'folyamatban…' : ($vDuration !== null ? format_duration($vDuration) : '—'),
+        'next_run' => $vNext,
+        'hints' => $vHints,
+        'running' => $vRunning,
+    ];
+
+    // --- Homes → DSM3 ---
+    $hStart = log_last_match(HOMES_LOG, '--- Homes szinkron INDUL');
+    $hEnd = log_last_match(HOMES_LOG, 'mp | rsync ---');
+    $hStartTs = parse_ts($hStart);
+    $hDuration = null;
+    if ($hEnd && preg_match('/össz idő: (\d+) mp/', $hEnd, $m)) {
+        $hDuration = (int)$m[1];
+    }
+    $hErrorLines = log_grep_tail(HOMES_LOG, 'HIBA p', 12);
+    if ($hStartTs) {
+        $hErrorLines = array_values(array_filter(
+            $hErrorLines,
+            static function (string $line) use ($hStartTs): bool {
+                $ts = parse_ts($line);
+                return $ts !== null && $ts >= $hStartTs;
+            }
+        ));
+    }
+    $hErrors = array_map(
+        static fn(string $line): string => preg_replace('/^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] /', '', $line),
+        array_slice($hErrorLines, -5)
+    );
+    $hRunning = count($processes['homes_rsync'] ?? []) > 0;
+    $hStatus = 'ok';
+    $hLabel = 'Sikeres';
+    if ($hRunning) {
+        $hStatus = 'running';
+        $hLabel = 'Fut';
+    } elseif ($homesPending && !$hRunning) {
+        $hStatus = 'waiting';
+        $hLabel = $hErrors !== [] ? 'Várakozik (pending · utolsó körben hibák)' : 'Várakozik (pending)';
+    } elseif ($hErrors !== []) {
+        $hStatus = 'partial';
+        $hLabel = 'Részleges (' . count($hErrors) . ' hiba)';
+    }
+    $hHints = [];
+    foreach ($hErrors as $err) {
+        if (str_contains($err, 'jogosultság') || str_contains($err, 'ACL')) {
+            $hHints[] = 'DSM3 ACL: sudo bash ~/fix_homes_permissions_dsm3.sh a naszikán';
+        } elseif (str_contains($err, 'rsync szolgáltatás')) {
+            $hHints[] = 'Naszika: Vezérlőpult → Fájlszolgáltatások → rsync engedélyezése';
+        } elseif (str_contains($err, 'tamas.sitkei/Drive')) {
+            $hHints[] = 'tamas.sitkei Drive: tulajdonos + sitkeitamas írás (fix script vagy File Station)';
+        }
+    }
+    $hHints = array_values(array_unique($hHints));
+    if ($homesPending && !$hRunning) {
+        $hHints[] = 'Változás észlelve — sync csak ' . $homesStart . ':00–' . $homesEnd . ':00 között indul.';
+    }
+    $jobs[] = [
+        'id' => 'homes',
+        'name' => 'Homes → DSM3',
+        'status' => $hStatus,
+        'status_label' => $hLabel,
+        'last_start' => $hStartTs,
+        'last_end' => parse_ts($hEnd),
+        'duration_sec' => $hDuration,
+        'duration_human' => $hDuration !== null ? format_duration($hDuration) : ($hRunning ? 'folyamatban…' : '—'),
+        'next_run' => next_homes_run_label($homesStart, $homesEnd, $homesPending),
+        'hints' => $hHints,
+        'errors' => array_slice($hErrors, 0, 5),
+        'running' => $hRunning,
+        'pending' => $homesPending,
+    ];
+
+    // --- Webcam ---
+    $wLines = read_log_lines(WEBCAM_LOG, 80);
+    $wStart = last_line_matching($wLines, '/Válogatás és Web frissítés indul/');
+    $wEnd = last_line_matching($wLines, '/--- KÉSZ ---/');
+    $wStartTs = parse_ts($wStart);
+    $wEndTs = parse_ts($wEnd);
+    $wOk = $wStartTs && $wEndTs && $wEndTs >= $wStartTs;
+    $jobs[] = [
+        'id' => 'webcam',
+        'name' => 'Webcam → homepage',
+        'status' => $wOk ? 'ok' : ($wStartTs ? 'running' : 'unknown'),
+        'status_label' => $wOk ? 'Sikeres' : ($wStartTs ? 'Folyamatban?' : 'Nincs adat'),
+        'last_start' => $wStartTs,
+        'last_end' => $wOk ? $wEndTs : null,
+        'duration_sec' => null,
+        'duration_human' => ($wStartTs && $wEndTs) ? format_duration(max(1, strtotime($wEndTs) - strtotime($wStartTs))) : '—',
+        'next_run' => 'DSM task: 10 percenként (sync_ederics.sh)',
+        'hints' => [],
+        'errors' => [],
+        'running' => false,
+    ];
+
+    // --- Monitor ---
+    $monPid = is_readable('/tmp/sync_monitor.pid') ? trim((string)file_get_contents('/tmp/sync_monitor.pid')) : '';
+    $monRunning = $monPid !== '' && run('kill -0 ' . escapeshellarg($monPid) . ' 2>/dev/null', 1) === '';
+    $wdPid = is_readable('/tmp/sync_monitor_watchdog.pid') ? trim((string)file_get_contents('/tmp/sync_monitor_watchdog.pid')) : '';
+    $wdRunning = $wdPid !== '' && run('kill -0 ' . escapeshellarg($wdPid) . ' 2>/dev/null', 1) === '';
+    $jobs[] = [
+        'id' => 'monitor',
+        'name' => 'Sync monitor',
+        'status' => $monRunning ? 'ok' : 'error',
+        'status_label' => $monRunning ? 'Fut' : 'Leállt',
+        'last_start' => null,
+        'last_end' => null,
+        'duration_sec' => null,
+        'duration_human' => '—',
+        'next_run' => $wdRunning ? 'Watchdog: 5 percenként ellenőriz' : 'Watchdog nem fut — sync_control restart',
+        'hints' => $monRunning ? [] : ['Indítsd: bash ~/scripts/sync-monitor/serve.sh start'],
+        'errors' => [],
+        'running' => $monRunning,
+    ];
+
+    return $jobs;
+}
+
 function build_status(bool $includeSizes = false, bool $refreshDisk = false): array
 {
     $videoEnv = parse_env_file(ENV_FILE);
@@ -235,10 +506,13 @@ function build_status(bool $includeSizes = false, bool $refreshDisk = false): ar
             'remote' => '—',
         ], $homesPairs);
 
+    $processes = process_status();
+
     return [
         'time' => date('Y-m-d H:i:s'),
         'sizes_included' => $includeSizes,
-        'processes' => process_status(),
+        'jobs' => build_jobs_summary($processes),
+        'processes' => $processes,
         'video' => [
             'folders' => $videoFolders,
             'env' => $videoEnv,
