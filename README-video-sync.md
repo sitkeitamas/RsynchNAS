@@ -1,5 +1,8 @@
 # Videó szinkron (nasznagy → DSM2)
 
+> **2026-06 — áthelyezve:** a videó sync **kétirányú vezérlése a DSM2-n** fut.  
+> Nasznagy push **kikapcsolva** (`VIDEO_SYNC_DISABLED=1`). Részletek: **[README-video-bidir-dsm2.md](README-video-bidir-dsm2.md)**
+
 **Cél:** `dsm2.sitkeitamas.hu` (`192.168.9.19`) — SSH port 22, user `sitkeitamas`  
 **Jelenlegi mappa:** teljes `/volume1/video` (~1,2 TB forrás, ~800 GB már DSM2-n, 2026-06-08)
 
@@ -81,18 +84,11 @@ tail -f ~/scripts/video_sync.log
 - Kizárva: `@eaDir/`, `thumb_*.jpg`
 - Törlés a forráson → törlődik a célon is (következő sikeres futáskor)
 
-## Fordított irány: Ederics → BP (pull)
+## Fordított irány — **DSM2 vezérlés (éles)**
 
-Ha Edericsen töltött le videó is kerülhet a könyvtárba, **külön script kell a DSM2-n** — a fenti push **nem** viszi vissza.
+Kétirányú sync **egy figyelővel a naszaretin** (120s poll): **[README-video-bidir-dsm2.md](README-video-bidir-dsm2.md)**
 
-| | BP → DSM2 | DSM2 → BP |
-|--|-----------|-----------|
-| Script | `sync_video_to_dsm2.sh` (nasznagy) | `sync_video_pull_to_bp.sh` (DSM2) |
-| `--delete` | igen (DSM2) | **nem** (BP) |
-
-Részletek, telepítés, cron időzítés (push **előtt**): **[README-video-pull-dsm2.md](README-video-pull-dsm2.md)**
-
-**Figyelem:** BP push `--delete`-je törölhet Ederics-only fájlt, ha a pull még nem futott le.
+~~Régi pull-only: [README-video-pull-dsm2.md](README-video-pull-dsm2.md) (elavult)~~
 
 ## DSM2 tárhely kontextus (2026-06-08)
 

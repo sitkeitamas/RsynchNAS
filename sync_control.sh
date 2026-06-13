@@ -16,11 +16,15 @@ stop_sync() {
 }
 
 start_sync() {
-    if ! ps aux | grep -q "[s]ync_video_trigger"; then
-        nohup bash "$TRIGGER" >> /dev/null 2>&1 &
-        echo "Videó figyelő elindult."
+    if [[ "${VIDEO_SYNC_DISABLED:-0}" != "1" ]]; then
+        if ! ps aux | grep -q "[s]ync_video_trigger"; then
+            nohup bash "$TRIGGER" >> /dev/null 2>&1 &
+            echo "Videó figyelő elindult."
+        else
+            echo "Videó figyelő már fut."
+        fi
     else
-        echo "Videó figyelő már fut."
+        echo "Videó figyelő kikapcsolva (VIDEO_SYNC_DISABLED=1, vezérlés DSM2)."
     fi
     if ! ps aux | grep -q "[s]ync_homes_trigger"; then
         nohup bash "$HOMES_TRIGGER" >> /dev/null 2>&1 &

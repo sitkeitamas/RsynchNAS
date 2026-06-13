@@ -11,6 +11,11 @@ PID_FILE="${PID_DIR}/sync_video_trigger.pid"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"; }
 
+if [[ "${VIDEO_SYNC_DISABLED:-0}" == "1" ]]; then
+    log "Kihagyva: videó trigger kikapcsolva — vezérlés DSM2 (sync_video_bidir_trigger)"
+    exit 0
+fi
+
 echo $$ > "$PID_FILE"
 log "Trigger indul (PID $$)"
 

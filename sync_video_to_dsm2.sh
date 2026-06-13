@@ -10,6 +10,11 @@ SYNC_PID_FILE="${PID_DIR}/sync_video_sync.pid"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"; }
 
+if [[ "${VIDEO_SYNC_DISABLED:-0}" == "1" ]]; then
+    log "Kihagyva: videó sync a DSM2-n fut (sync_video_bidir) — nasznagy push kikapcsolva"
+    exit 0
+fi
+
 video_rsync_running() {
     ps aux 2>/dev/null | grep -E "[r]sync .*${REMOTE_USER}@${REMOTE_HOST}:.*/volume1/video/" >/dev/null 2>&1
 }
