@@ -50,21 +50,45 @@ exit
 
 A pull script **megfordítja** az irányt: DSM2 `/volume1/video` → BP `/volume1/video`.
 
+## Figyelő (ajánlott) — **nem kell** óránkénti Feladatütemező
+
+Ugyanaz a modell, mint nasznagy videó sync:
+
+| Mód | Script | Viselkedés |
+|-----|--------|------------|
+| **Poll** (alap) | `sync_video_pull_trigger.sh` | **120 mp**-enként mtime ellenőrzés → változáskor pull |
+| inotify | ugyanaz | ha van `inotifywait` → azonnali reakció |
+
+```bash
+bash ~/scripts/sync_video_pull_control.sh start    # figyelő háttérben
+bash ~/scripts/sync_video_pull_control.sh status
+bash ~/scripts/sync_video_pull_control.sh stop
+tail -f ~/scripts/video_pull.log
+```
+
+### DSM Feladatütemező — csak **egy** boot task kell
+
+| Név | Típus | Parancs | User |
+|-----|-------|---------|------|
+| video pull watch | **Rendszerindítás** | `bash /volume1/homes/sitkeitamas/scripts/sync_video_pull_control.sh start` | sitkeitamas |
+
+**Nem kell** 02:30 / 14:30 cron, ha a figyelő fut — változás után max. ~2 perc késés (poll).
+
+Opcionális biztonsági háló (push előtt): **02:30** `sync_video_pull_now.sh` — ha órákig nem volt változás, de mégis akarsz egy teljes ellenőrzést.
+
 ## Parancsok (DSM2 SSH)
 
 ```bash
-bash ~/scripts/sync_video_pull_now.sh          # azonnali pull
+bash ~/scripts/sync_video_pull_control.sh start   # figyelő (120s poll)
+bash ~/scripts/sync_video_pull_now.sh             # azonnali pull (kézi)
 tail -f ~/scripts/video_pull.log
-bash ~/scripts/sync_video_pull_trigger.sh &    # poll (30 perc)
 ```
 
-## DSM Feladatütemező (DSM2)
+~~Opcionális: boot után `sync_video_pull_trigger.sh` háttérben.~~ → használd a `sync_video_pull_control.sh start`-ot.
 
-| Név | Mikor | Parancs | User |
-|-----|-------|---------|------|
-| video pull BP | 02:30, 14:30 | `bash /volume1/homes/sitkeitamas/scripts/sync_video_pull_now.sh` | sitkeitamas |
+## ~~DSM Feladatütemező (DSM2)~~
 
-Opcionális: boot után `sync_video_pull_trigger.sh` háttérben.
+Lásd fent: **boot task** elég; poll figyelő helyettesíti az időzített pull-t.
 
 ## Sebesség
 
