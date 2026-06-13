@@ -82,22 +82,25 @@ deny_if_external();
     </div>
   </div>
 
-  <h3>DSM2 — videó (naszareti)</h3>
+  <h3 id="video-section-title">DSM2 — videó bidir (naszareti)</h3>
   <div class="grid">
     <div class="card">
       <h2>Videó állapot</h2>
       <div id="video-proc">—</div>
       <div class="disk" id="video-disk"></div>
       <div class="btns">
-        <button type="button" onclick="ctl('sync_now')">Videó sync most</button>
+        <button type="button" id="video-sync-btn" onclick="videoSyncNow()">Videó bidir most (DSM2)</button>
       </div>
+      <p id="video-bidir-note" class="sub" style="margin:.75rem 0 0;font-size:.78rem;display:none">
+        Nasznagy videó push kikapcsolva — vezérlés a DSM2-n (poll + boot task). A beállítások alul csak legacy / mappalista.
+      </p>
     </div>
     <div class="card">
       <h2>Videó mappák</h2>
       <div id="video-sizes">—</div>
     </div>
     <div class="card">
-      <h2>video_sync.log</h2>
+      <h2 id="video-log-title">video_bidir.log (DSM2)</h2>
       <pre id="video-log">…</pre>
     </div>
   </div>
@@ -205,27 +208,62 @@ function folderTable(folders, remoteLabel) {
 
 let refreshBusy = false;
 
+let videoBidirMode = true;
+
+function renderVideoProc(p, v) {
+  const bidir = !!v.bidir;
+  videoBidirMode = bidir;
+  document.getElementById('video-bidir-note').style.display = bidir ? 'block' : 'none';
+  document.getElementById('video-sync-btn').textContent = bidir ? 'Videó bidir most (DSM2)' : 'Videó sync most';
+  document.getElementById('video-log-title').textContent = bidir ? 'video_bidir.log (DSM2)' : 'video_sync.log';
+  document.getElementById('video-section-title').textContent = bidir
+    ? 'DSM2 — videó bidir (naszareti · Ederics↔BP)'
+    : 'DSM2 — videó (naszareti)';
+
+  let html = '';
+  if (bidir) {
+    const sshOk = p.video_bidir_ok !== false;
+    html += `<div>Bidir figyelő (DSM2): <span class="badge ${p.video_bidir_trigger?'on':'off'}">${p.video_bidir_trigger?'fut':'áll'}</span>`;
+    if (!sshOk) html += ' <span class="badge off">SSH hiba</span>';
+    html += '</div>';
+    html += `<div style="margin-top:.35rem;font-size:.78rem;color:var(--muted)">Nasznagy videó trigger: <span class="badge off">kikapcsolva</span></div>`;
+  } else {
+    html += `<div>Videó trigger: <span class="badge ${p.video_trigger?'on':'off'}">${p.video_trigger?'fut':'áll'}</span></div>`;
+  }
+  if (p.video_rsync.length) {
+    html += '<div style="margin-top:.5rem"><span class="badge on">rsync fut</span><pre style="margin-top:.5rem">'+p.video_rsync.join('\n')+'</pre></div>';
+  } else {
+    html += '<div style="margin-top:.5rem"><span class="badge off">nincs aktív rsync</span></div>';
+  }
+  document.getElementById('video-proc').innerHTML = html;
+}
+
+function videoSyncNow() {
+  ctl(videoBidirMode ? 'sync_video_bidir_now' : 'sync_now');
+}
+
 async function refresh() {
   if (refreshBusy) return;
   refreshBusy = true;
   try {
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 12000);
+  const t = setTimeout(() => ctrl.abort(), 20000);
   const r = await fetch('api.php?action=status', { signal: ctrl.signal });
   clearTimeout(t);
   const d = await r.json();
   renderJobs(d.jobs);
   const p = d.processes;
+  const v = d.video;
+  const videoLine = v.bidir
+    ? `Bidir figyelő (DSM2): <span class="badge ${p.video_bidir_trigger?'on':'off'}">${p.video_bidir_trigger?'fut':'áll'}</span>`
+    : `Videó trigger: <span class="badge ${p.video_trigger?'on':'off'}">${p.video_trigger?'fut':'áll'}</span>`;
   document.getElementById('status-proc').innerHTML = `
-    <div>Videó trigger: <span class="badge ${p.video_trigger?'on':'off'}">${p.video_trigger?'fut':'áll'}</span></div>
+    <div>${videoLine}</div>
     <div style="margin-top:.4rem">Homes trigger: <span class="badge ${p.homes_trigger?'on':'off'}">${p.homes_trigger?'fut':'áll'}</span>
       ${p.homes_pending ? ' <span class="badge pending">pending változás</span>' : ''}</div>
     <div style="margin-top:.4rem;font-size:.8rem;color:var(--muted)">Frissítve: ${d.time}</div>`;
 
-  const v = d.video;
-  document.getElementById('video-proc').innerHTML = p.video_rsync.length
-    ? '<span class="badge on">rsync fut</span><pre style="margin-top:.5rem">'+p.video_rsync.join('\n')+'</pre>'
-    : '<span class="badge off">nincs aktív rsync</span>';
+  renderVideoProc(p, v);
   document.getElementById('video-disk').textContent = 'DSM2 tár: ' + (v.remote_disk || '—');
   document.getElementById('video-sizes').innerHTML = folderTable(v.folders, 'DSM2');
   document.getElementById('video-log').textContent = v.log;
@@ -264,8 +302,12 @@ async function refresh() {
 }
 
 async function ctl(cmd) {
-  const labels = { sync_now: 'videó', sync_homes_now: 'homes (naszika)' };
-  if ((cmd === 'sync_now' || cmd === 'sync_homes_now') && !confirm(`Azonnali ${labels[cmd] || cmd} sync indul. OK?`)) return;
+  const labels = {
+    sync_now: 'videó',
+    sync_video_bidir_now: 'videó bidir (DSM2)',
+    sync_homes_now: 'homes (naszika)'
+  };
+  if ((cmd === 'sync_now' || cmd === 'sync_video_bidir_now' || cmd === 'sync_homes_now') && !confirm(`Azonnali ${labels[cmd] || cmd} sync indul. OK?`)) return;
   const fd = new FormData(); fd.append('action','control'); fd.append('cmd', cmd);
   const r = await fetch('api.php', { method:'POST', body: fd });
   const d = await r.json();

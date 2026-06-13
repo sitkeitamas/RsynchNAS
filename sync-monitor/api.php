@@ -40,7 +40,7 @@ try {
                 throw new RuntimeException('POST kell');
             }
             $cmd = $_POST['cmd'] ?? '';
-            if (!in_array($cmd, ['start', 'stop', 'restart', 'sync_now', 'sync_homes_now'], true)) {
+            if (!in_array($cmd, ['start', 'stop', 'restart', 'sync_now', 'sync_homes_now', 'sync_video_bidir_now'], true)) {
                 throw new RuntimeException('Érvénytelen parancs');
             }
             $out = run_action($cmd);
