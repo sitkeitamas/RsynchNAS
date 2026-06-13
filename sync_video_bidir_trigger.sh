@@ -1,5 +1,5 @@
 #!/bin/bash
-# DSM2: 120s poll — local + BP mtime → bidir sync (előbb Ederics→BP, aztán BP→Ederics)
+# DSM2: 120s poll — gyors változás-észlelés (nem scan-eli az egész TB-ot minden ciklusban)
 set -uo pipefail
 
 SCRIPT_DIR="/volume1/homes/sitkeitamas/scripts"
@@ -10,11 +10,12 @@ SYNC_SCRIPT="${SCRIPT_DIR}/sync_video_bidir.sh"
 LOCAL_STAMP="${PID_DIR}/sync_video_bidir_local_stamp"
 REMOTE_STAMP="${PID_DIR}/sync_video_bidir_remote_stamp"
 PID_FILE="${PID_DIR}/sync_video_bidir_trigger.pid"
+CHECK_TIMEOUT="${MTIME_CHECK_TIMEOUT:-45}"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"; }
 
 echo $$ > "$PID_FILE"
-log "Bidir trigger indul (PID $$, poll ${POLL_INTERVAL_SEC}s)"
+log "Bidir trigger indul (PID $$, poll ${POLL_INTERVAL_SEC}s, check timeout ${CHECK_TIMEOUT}s)"
 
 get_dsm_dirs() {
     local line bp_path dsm_path
@@ -40,35 +41,45 @@ get_bp_dirs() {
     done < "$FOLDERS_CONF"
 }
 
-latest_local_mtime() {
-    local dirs=()
-    while IFS= read -r _d; do dirs+=("$_d"); done < <(get_dsm_dirs)
-    [[ ${#dirs[@]} -eq 0 ]] && return 1
-    find "${dirs[@]}" -type f ! -path '*/@eaDir/*' ! -path '*/#recycle/*' \
-        -printf '%T@\n' 2>/dev/null | sort -n | tail -1
+init_stamp() {
+    local f="$1"
+    if [[ ! -f "$f" ]]; then
+        date +%s > "$f"
+        log "Stamp init: $f"
+    fi
 }
 
-latest_remote_mtime() {
-    local dirs shell_dirs
-    shell_dirs=$(get_bp_dirs | tr '\n' ' ')
-    [[ -z "$shell_dirs" ]] && return 1
-    ssh ${SSH_OPTS} -p "${BP_PORT}" "${BP_USER}@${BP_HOST}" \
-        "find ${shell_dirs} -type f ! -path '*/@eaDir/*' ! -path '*/#recycle/*' -printf '%T@\n' 2>/dev/null | sort -n | tail -1" 2>/dev/null
+# Van-e fájl újabb, mint a stamp? (gyors — nem kell max mtime az egész fán)
+dir_has_changes_since() {
+    local stamp_file="$1"
+    shift
+    local dirs=("$@") ref since
+    [[ ${#dirs[@]} -eq 0 ]] && return 1
+    since=$(cat "$stamp_file" 2>/dev/null || echo "0")
+    ref=$(mktemp)
+    # GNU find: -newermt @epoch
+    if ! timeout "$CHECK_TIMEOUT" find "${dirs[@]}" -type f \
+        ! -path '*/@eaDir/*' ! -path '*/#recycle/*' \
+        -newermt "@${since}" -print -quit 2>/dev/null | grep -q .; then
+        rm -f "$ref"
+        return 1
+    fi
+    rm -f "$ref"
+    return 0
+}
+
+remote_has_changes_since() {
+    local stamp_file="$1"
+    local since dirs_cmd
+    since=$(cat "$stamp_file" 2>/dev/null || echo "0")
+    dirs_cmd=$(get_bp_dirs | while read -r d; do printf '%q ' "$d"; done)
+    [[ -z "$dirs_cmd" ]] && return 1
+    timeout "$CHECK_TIMEOUT" ssh ${SSH_OPTS} -p "${BP_PORT}" "${BP_USER}@${BP_HOST}" \
+        "find ${dirs_cmd} -type f ! -path '*/@eaDir/*' ! -path '*/#recycle/*' -newermt @${since} -print -quit 2>/dev/null" 2>/dev/null | grep -q .
 }
 
 run_bidir() {
-    local push=0 pull=0
-    [[ "${1:-}" == *push* ]] && push=1
-    [[ "${1:-}" == *pull* ]] && pull=1
-    SYNC_BIDIR_PUSH="$push" SYNC_BIDIR_PULL="$pull" bash "$SYNC_SCRIPT"
-}
-
-find_inotifywait() {
-    local p
-    for p in inotifywait /opt/bin/inotifywait /usr/local/bin/inotifywait; do
-        command -v "$p" &>/dev/null && { echo "$p"; return 0; }
-    done
-    return 1
+    SYNC_BIDIR_PUSH="${1:-0}" SYNC_BIDIR_PULL="${2:-0}" bash "$SYNC_SCRIPT"
 }
 
 WATCH_DIRS=()
@@ -79,48 +90,34 @@ if [[ ${#WATCH_DIRS[@]} -eq 0 ]]; then
     exit 1
 fi
 
-cycle_poll() {
-    local local_cur remote_cur local_last remote_last changed=""
-    local_cur=$(latest_local_mtime || echo "")
-    remote_cur=$(latest_remote_mtime || echo "")
-    local_last=$(cat "$LOCAL_STAMP" 2>/dev/null || echo "0")
-    remote_last=$(cat "$REMOTE_STAMP" 2>/dev/null || echo "0")
+init_stamp "$LOCAL_STAMP"
+init_stamp "$REMOTE_STAMP"
 
-    [[ -n "$local_cur" && "$local_cur" != "$local_last" ]] && changed="push"
-    if [[ -n "$remote_cur" && "$remote_cur" != "$remote_last" ]]; then
-        changed="${changed} pull"
+log "poll mód (${POLL_INTERVAL_SEC}s): ${WATCH_DIRS[*]}"
+
+while true; do
+    log "poll tick"
+    local_push=0
+    local_pull=0
+
+    if dir_has_changes_since "$LOCAL_STAMP" "${WATCH_DIRS[@]}"; then
+        local_push=1
+        log "változás: Ederics (local)"
     fi
-    [[ -z "$changed" ]] && return 0
 
-    log "Változás: local=${local_cur:-?} (was ${local_last}) remote=${remote_cur:-?} (was ${remote_last}) →${changed}"
-
-    # Ederics új fájl: előbb push, aztán pull (ha kell)
-    if [[ "$changed" == *push* ]]; then
-        run_bidir push
-        [[ -n "$local_cur" ]] && echo "$local_cur" > "$LOCAL_STAMP"
+    if remote_has_changes_since "$REMOTE_STAMP"; then
+        local_pull=1
+        log "változás: BP (remote)"
+    elif ! timeout 10 ssh ${SSH_OPTS} -p "${BP_PORT}" "${BP_USER}@${BP_HOST}" true 2>/dev/null; then
+        log "FIGYELMEZTETÉS: BP SSH nem elérhető (VPN?) — pull kihagyva"
     fi
-    if [[ "$changed" == *pull* ]]; then
-        run_bidir pull
-        [[ -n "$remote_cur" ]] && echo "$remote_cur" > "$REMOTE_STAMP"
-    fi
-}
 
-INOTIFY=$(find_inotifywait || true)
-if [[ -n "$INOTIFY" ]]; then
-    log "inotify mód: ${WATCH_DIRS[*]}"
-    "$INOTIFY" -m -r -e create,delete,close_write,move "${WATCH_DIRS[@]}" 2>>"$LOG_FILE" | while read -r path event file; do
-        [[ "$file" =~ @eaDir ]] && continue
-        log "Esemény: $event $path$file"
-        run_bidir "push pull"
-        local_cur=$(latest_local_mtime || echo "")
-        [[ -n "$local_cur" ]] && echo "$local_cur" > "$LOCAL_STAMP"
-        remote_cur=$(latest_remote_mtime || echo "")
-        [[ -n "$remote_cur" ]] && echo "$remote_cur" > "$REMOTE_STAMP"
-    done
-else
-    log "poll mód (${POLL_INTERVAL_SEC}s): ${WATCH_DIRS[*]}"
-    while true; do
-        cycle_poll
-        sleep "$POLL_INTERVAL_SEC"
-    done
-fi
+    if [[ "$local_push" == "1" ]]; then
+        run_bidir 1 0 && date +%s > "$LOCAL_STAMP"
+    fi
+    if [[ "$local_pull" == "1" ]]; then
+        run_bidir 0 1 && date +%s > "$REMOTE_STAMP"
+    fi
+
+    sleep "$POLL_INTERVAL_SEC"
+done
