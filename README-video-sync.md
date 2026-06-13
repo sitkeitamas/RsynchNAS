@@ -81,6 +81,19 @@ tail -f ~/scripts/video_sync.log
 - Kizárva: `@eaDir/`, `thumb_*.jpg`
 - Törlés a forráson → törlődik a célon is (következő sikeres futáskor)
 
+## Fordított irány: Ederics → BP (pull)
+
+Ha Edericsen töltött le videó is kerülhet a könyvtárba, **külön script kell a DSM2-n** — a fenti push **nem** viszi vissza.
+
+| | BP → DSM2 | DSM2 → BP |
+|--|-----------|-----------|
+| Script | `sync_video_to_dsm2.sh` (nasznagy) | `sync_video_pull_to_bp.sh` (DSM2) |
+| `--delete` | igen (DSM2) | **nem** (BP) |
+
+Részletek, telepítés, cron időzítés (push **előtt**): **[README-video-pull-dsm2.md](README-video-pull-dsm2.md)**
+
+**Figyelem:** BP push `--delete`-je törölhet Ederics-only fájlt, ha a pull még nem futott le.
+
 ## DSM2 tárhely kontextus (2026-06-08)
 
 - Synology Drive Server eltávolítva → ~768 GB felszabadult (`@synologydrive` megszűnt)
