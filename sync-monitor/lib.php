@@ -180,10 +180,10 @@ function remote_log_tail(string $host, string $path, int $lines = 35, int $port 
     return $out !== '' ? $out : '(DSM2 log nem elérhető — SSH/VPN?)';
 }
 
-/** @return array{ok:bool,trigger:bool,rsync:list<string>,log_tail:string} */
+/** @return array{ok:bool,trigger:bool,sync_count:int,rsync:list<string>,log_tail:string} */
 function dsm2_bidir_status(bool $refresh = false): array
 {
-    $empty = ['ok' => false, 'trigger' => false, 'rsync' => [], 'log_tail' => ''];
+    $empty = ['ok' => false, 'trigger' => false, 'sync_count' => 0, 'rsync' => [], 'log_tail' => ''];
     if (!$refresh && is_readable(BIDIR_STATUS_CACHE)) {
         $cache = json_decode((string)file_get_contents(BIDIR_STATUS_CACHE), true);
         if (is_array($cache) && (time() - (int)($cache['ts'] ?? 0)) < BIDIR_CACHE_TTL_SEC) {
@@ -201,7 +201,11 @@ function dsm2_bidir_status(bool $refresh = false): array
         6
     );
     $rsync = [];
+    $syncCount = 0;
     foreach (explode("\n", $ps) as $line) {
+        if (str_contains($line, 'sync_video_bidir.sh') && !str_contains($line, 'sync_video_bidir_trigger')) {
+            $syncCount++;
+        }
         if ($line === '' || !str_contains($line, 'rsync')) {
             continue;
         }
@@ -213,6 +217,7 @@ function dsm2_bidir_status(bool $refresh = false): array
     $data = [
         'ok' => true,
         'trigger' => str_contains($ps, 'sync_video_bidir_trigger'),
+        'sync_count' => $syncCount,
         'rsync' => $rsync,
         'log_tail' => remote_log_tail(DSM2_HOST, VIDEO_BIDIR_LOG, 35, DSM2_PORT),
         'ts' => time(),
@@ -241,7 +246,7 @@ function process_status(): array
             $homesRsync[] = preg_replace('/\s+/', ' ', trim($line));
         }
     }
-    $bidir = video_sync_on_dsm2() ? dsm2_bidir_status(false) : ['ok' => false, 'trigger' => false, 'rsync' => []];
+    $bidir = video_sync_on_dsm2() ? dsm2_bidir_status(false) : ['ok' => false, 'trigger' => false, 'sync_count' => 0, 'rsync' => []];
     if ($bidir['ok'] && !empty($bidir['rsync'])) {
         $videoRsync = array_merge($videoRsync, $bidir['rsync']);
     }
@@ -249,6 +254,7 @@ function process_status(): array
         'video_trigger' => str_contains($ps, 'sync_video_trigger'),
         'video_bidir' => video_sync_on_dsm2(),
         'video_bidir_trigger' => (bool)($bidir['trigger'] ?? false),
+        'video_bidir_sync_count' => (int)($bidir['sync_count'] ?? 0),
         'video_bidir_ok' => (bool)($bidir['ok'] ?? false),
         'homes_trigger' => str_contains($ps, 'sync_homes_trigger'),
         'homes_sync' => str_contains($ps, 'sync_homes_to_dsm3'),
@@ -431,6 +437,13 @@ function build_jobs_summary(array $processes): array
     }
     $vRunning = count($processes['video_rsync'] ?? []) > 0;
     $vDuplicate = count($processes['video_rsync'] ?? []) > 1;
+    if ($bidirMode) {
+        $syncCount = (int)($processes['video_bidir_sync_count'] ?? 0);
+        if ($syncCount > 0) {
+            $vRunning = true;
+        }
+        $vDuplicate = $syncCount > 1;
+    }
     $vStatus = 'unknown';
     $vLabel = 'Ismeretlen';
     $vHints = [];
