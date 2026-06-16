@@ -53,18 +53,17 @@ init_stamp() {
 dir_has_changes_since() {
     local stamp_file="$1"
     shift
-    local dirs=("$@") ref since
+    local dirs=("$@") since
     [[ ${#dirs[@]} -eq 0 ]] && return 1
     since=$(cat "$stamp_file" 2>/dev/null || echo "0")
-    ref=$(mktemp)
     # GNU find: -newermt @epoch
-    if ! timeout "$CHECK_TIMEOUT" find "${dirs[@]}" -type f \
-        ! -path '*/@eaDir/*' ! -path '*/#recycle/*' \
-        -newermt "@${since}" -print -quit 2>/dev/null | grep -q .; then
-        rm -f "$ref"
+    if ! timeout "$CHECK_TIMEOUT" bash -lc '
+        find "$@" -type f \
+            ! -path "*/@eaDir/*" ! -path "*/#recycle/*" \
+            -newermt "@'"$since"'" -print -quit 2>/dev/null || true
+    ' _ "${dirs[@]}" | grep -q .; then
         return 1
     fi
-    rm -f "$ref"
     return 0
 }
 
@@ -75,7 +74,8 @@ remote_has_changes_since() {
     dirs_cmd=$(get_bp_dirs | while read -r d; do printf '%q ' "$d"; done)
     [[ -z "$dirs_cmd" ]] && return 1
     timeout "$CHECK_TIMEOUT" ssh ${SSH_OPTS} -p "${BP_PORT}" "${BP_USER}@${BP_HOST}" \
-        "find ${dirs_cmd} -type f ! -path '*/@eaDir/*' ! -path '*/#recycle/*' -newermt @${since} -print -quit 2>/dev/null" 2>/dev/null | grep -q .
+        "find ${dirs_cmd} -type f ! -path '*/@eaDir/*' ! -path '*/#recycle/*' -newermt @${since} -print -quit 2>/dev/null || true" \
+        2>/dev/null | grep -q .
 }
 
 run_bidir() {
