@@ -14,7 +14,8 @@ const DSM2_HOST = '192.168.9.19';
 const DSM2_PORT = 22;
 const VIDEO_BIDIR_LOG = '/volume1/homes/sitkeitamas/scripts/video_bidir.log';
 const BIDIR_STATUS_CACHE = '/tmp/sync_monitor_bidir_cache.json';
-const BIDIR_CACHE_TTL_SEC = 25;
+const BIDIR_CACHE_TTL_SEC = 60;
+const BIDIR_SSH_TIMEOUT_SEC = 12;
 const BIND_HOST = '192.168.5.9';
 const BIND_PORT = 8765;
 
@@ -180,26 +181,61 @@ function remote_log_tail(string $host, string $path, int $lines = 35, int $port 
     return $out !== '' ? $out : '(DSM2 log nem elérhető — SSH/VPN?)';
 }
 
-/** @return array{ok:bool,trigger:bool,sync_count:int,rsync:list<string>,log_tail:string} */
+function dsm2_bidir_remote_bundle_cmd(): string
+{
+    // Csak ps + log vége — a log TB méretű lehet (rsync sorok), grep SOHA.
+    return sprintf(
+        'ps aux 2>/dev/null | grep -E "sync_video_bidir|[r]sync.*volume1/video" | grep -v grep; ' .
+        'printf "\n---SPLIT---\n"; ' .
+        'tail -n 80 %s 2>/dev/null',
+        escapeshellarg(VIDEO_BIDIR_LOG)
+    );
+}
+
+function dsm2_bidir_status_from_cache_file(): ?array
+{
+    if (!is_readable(BIDIR_STATUS_CACHE)) {
+        return null;
+    }
+    $cache = json_decode((string)file_get_contents(BIDIR_STATUS_CACHE), true);
+    return is_array($cache) ? $cache : null;
+}
+
+/** @return array{ok:bool,trigger:bool,sync_count:int,rsync:list<string>,log_tail:string,last_indul:?string,last_vege:?string,poll_sec:int} */
 function dsm2_bidir_status(bool $refresh = false): array
 {
-    $empty = ['ok' => false, 'trigger' => false, 'sync_count' => 0, 'rsync' => [], 'log_tail' => ''];
-    if (!$refresh && is_readable(BIDIR_STATUS_CACHE)) {
-        $cache = json_decode((string)file_get_contents(BIDIR_STATUS_CACHE), true);
+    $empty = [
+        'ok' => false,
+        'trigger' => false,
+        'sync_count' => 0,
+        'rsync' => [],
+        'log_tail' => '',
+        'last_indul' => null,
+        'last_vege' => null,
+        'poll_sec' => 120,
+    ];
+    if (!$refresh) {
+        $cache = dsm2_bidir_status_from_cache_file();
         if (is_array($cache) && (time() - (int)($cache['ts'] ?? 0)) < BIDIR_CACHE_TTL_SEC) {
             return $cache + ['ok' => (bool)($cache['ok'] ?? false)];
         }
     }
-    if (remote_ssh(DSM2_HOST, 'echo ok', 'sitkeitamas', DSM2_PORT, 4) !== 'ok') {
-        return $empty + ['log_tail' => '(DSM2 SSH timeout)'];
+    $raw = remote_ssh(DSM2_HOST, dsm2_bidir_remote_bundle_cmd(), 'sitkeitamas', DSM2_PORT, BIDIR_SSH_TIMEOUT_SEC);
+    if ($raw === '') {
+        $stale = dsm2_bidir_status_from_cache_file();
+        if (is_array($stale) && ($stale['ok'] ?? false)) {
+            return $stale + ['ok' => true, 'stale' => true];
+        }
+        $fail = $empty + ['log_tail' => '(DSM2 SSH timeout)', 'ts' => time()];
+        @file_put_contents(BIDIR_STATUS_CACHE, json_encode($fail, JSON_UNESCAPED_UNICODE));
+        return $fail;
     }
-    $ps = remote_ssh(
-        DSM2_HOST,
-        'ps aux 2>/dev/null | grep -E "sync_video_bidir|[r]sync.*volume1/video" | grep -v grep',
-        'sitkeitamas',
-        DSM2_PORT,
-        6
-    );
+    $parts = explode("\n---SPLIT---\n", $raw, 2);
+    $ps = $parts[0] ?? '';
+    $logTail = trim($parts[1] ?? '');
+    $logLines = $logTail !== '' ? explode("\n", $logTail) : [];
+    $lastIndul = last_line_matching($logLines, '/Videó bidir INDUL/');
+    $lastVege = last_line_matching($logLines, '/Videó bidir VÉGE/');
     $rsync = [];
     $syncCount = 0;
     foreach (explode("\n", $ps) as $line) {
@@ -219,14 +255,17 @@ function dsm2_bidir_status(bool $refresh = false): array
         'trigger' => str_contains($ps, 'sync_video_bidir_trigger'),
         'sync_count' => $syncCount,
         'rsync' => $rsync,
-        'log_tail' => remote_log_tail(DSM2_HOST, VIDEO_BIDIR_LOG, 35, DSM2_PORT),
+        'log_tail' => $logTail !== '' ? $logTail : '(DSM2 log üres)',
+        'last_indul' => $lastIndul,
+        'last_vege' => $lastVege,
+        'poll_sec' => 120,
         'ts' => time(),
     ];
     @file_put_contents(BIDIR_STATUS_CACHE, json_encode($data, JSON_UNESCAPED_UNICODE));
     return $data;
 }
 
-function process_status(): array
+function process_status(?array $bidir = null): array
 {
     $ps = run('ps aux 2>/dev/null | grep -E "sync_(video|homes)|rsync" | grep -v grep', 3);
     $videoRsync = [];
@@ -246,7 +285,12 @@ function process_status(): array
             $homesRsync[] = preg_replace('/\s+/', ' ', trim($line));
         }
     }
-    $bidir = video_sync_on_dsm2() ? dsm2_bidir_status(false) : ['ok' => false, 'trigger' => false, 'sync_count' => 0, 'rsync' => []];
+    if ($bidir === null && video_sync_on_dsm2()) {
+        $bidir = dsm2_bidir_status(false);
+    }
+    if (!is_array($bidir)) {
+        $bidir = ['ok' => false, 'trigger' => false, 'sync_count' => 0, 'rsync' => []];
+    }
     if ($bidir['ok'] && !empty($bidir['rsync'])) {
         $videoRsync = array_merge($videoRsync, $bidir['rsync']);
     }
@@ -400,7 +444,7 @@ function parse_ts(?string $line): ?string
     return $m[1];
 }
 
-function build_jobs_summary(array $processes): array
+function build_jobs_summary(array $processes, ?array $bidir = null): array
 {
     $videoEnv = parse_env_file(ENV_FILE);
     $homesEnv = parse_env_file(HOMES_ENV_FILE);
@@ -414,16 +458,12 @@ function build_jobs_summary(array $processes): array
     // --- Videó (DSM2 bidir vagy legacy nasznagy push) ---
     $bidirMode = video_sync_on_dsm2();
     if ($bidirMode) {
-        $bidir = dsm2_bidir_status(false);
-        $vStart = remote_log_last_match(DSM2_HOST, VIDEO_BIDIR_LOG, 'Videó bidir INDUL', DSM2_PORT);
-        $vEnd = remote_log_last_match(DSM2_HOST, VIDEO_BIDIR_LOG, 'Videó bidir VÉGE', DSM2_PORT);
-        $vPoll = (int)(remote_ssh(
-            DSM2_HOST,
-            "grep -E '^POLL_INTERVAL_SEC=' " . escapeshellarg(dirname(VIDEO_BIDIR_LOG) . '/sync_video_bidir.env') . " 2>/dev/null | cut -d= -f2",
-            'sitkeitamas',
-            DSM2_PORT,
-            5
-        ) ?: 120);
+        if ($bidir === null) {
+            $bidir = dsm2_bidir_status(false);
+        }
+        $vStart = $bidir['last_indul'] ?? null;
+        $vEnd = $bidir['last_vege'] ?? null;
+        $vPoll = (int)($bidir['poll_sec'] ?? 120);
     } else {
         $vStart = log_last_match(VIDEO_LOG, '--- Szinkron INDUL ---');
         $vEnd = log_last_match(VIDEO_LOG, 'mp ---', 'Szinkron');
@@ -633,17 +673,17 @@ function build_status(bool $includeSizes = false, bool $refreshDisk = false): ar
             'remote' => '—',
         ], $homesPairs);
 
-    $processes = process_status();
     $bidirMode = video_sync_on_dsm2();
     $bidir = $bidirMode ? dsm2_bidir_status(false) : null;
+    $processes = process_status($bidir);
     $videoLog = $bidirMode && is_array($bidir)
-        ? (string)($bidir['log_tail'] ?? remote_log_tail(DSM2_HOST, VIDEO_BIDIR_LOG))
+        ? (string)($bidir['log_tail'] ?? '(DSM2 log nem elérhető)')
         : tail_file(VIDEO_LOG, 35);
 
     return [
         'time' => date('Y-m-d H:i:s'),
         'sizes_included' => $includeSizes,
-        'jobs' => build_jobs_summary($processes),
+        'jobs' => build_jobs_summary($processes, $bidir),
         'processes' => $processes,
         'video' => [
             'bidir' => $bidirMode,

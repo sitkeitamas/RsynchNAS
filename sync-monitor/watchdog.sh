@@ -85,6 +85,8 @@ case "${1:-run}" in
       now=$(date +%s)
       if (( now - last_disk >= DISK_EVERY )); then
         bash "$DIR/update_disk_cache.sh" >> "$LOG" 2>&1 || true
+        /usr/local/bin/php82 "$DIR/refresh_bidir_cache.php" >> "$LOG" 2>&1 \
+          || /usr/bin/php "$DIR/refresh_bidir_cache.php" >> "$LOG" 2>&1 || true
         last_disk=$now
       fi
       sleep "$INTERVAL"

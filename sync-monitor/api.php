@@ -4,7 +4,7 @@ require __DIR__ . '/lib.php';
 
 deny_if_external();
 header('Content-Type: application/json; charset=utf-8');
-set_time_limit(45);
+set_time_limit(60);
 
 $action = $_GET['action'] ?? $_POST['action'] ?? 'status';
 

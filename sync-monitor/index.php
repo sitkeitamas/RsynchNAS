@@ -247,7 +247,7 @@ async function refresh() {
   refreshBusy = true;
   try {
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 20000);
+  const t = setTimeout(() => ctrl.abort(), 45000);
   const r = await fetch('api.php?action=status', { signal: ctrl.signal });
   clearTimeout(t);
   const d = await r.json();

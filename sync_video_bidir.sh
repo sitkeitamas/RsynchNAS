@@ -39,7 +39,7 @@ run_rsync_logged() {
     local tmplog result
     log "INDUL: ${label}"
     tmplog=$(mktemp)
-    rsync "$@" 2>&1 | tee -a "$LOG_FILE" "$tmplog" || true
+    rsync "$@" 2>&1 | tee "$tmplog" || true
     result=$(cat "$tmplog")
     rm -f "$tmplog"
     if echo "$result" | grep -qE "rsync service is no running|Permission denied \(13\)|rsync error:"; then
