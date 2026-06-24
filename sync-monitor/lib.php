@@ -18,6 +18,7 @@ const BIDIR_CACHE_TTL_SEC = 60;
 const BIDIR_SSH_TIMEOUT_SEC = 12;
 const BIND_HOST = '192.168.5.9';
 const BIND_PORT = 8765;
+const SPEED_PORT = 8766;
 
 function client_allowed(): bool
 {
@@ -795,4 +796,223 @@ function read_doc(string $name): string
         throw new RuntimeException('A fájl nem olvasható: ' . $name);
     }
     return file_get_contents($path);
+}
+
+const SITE_SPEED_MAX_MB = 50;
+const SITE_SPEED_TIMEOUT_SEC = 120;
+const SITE_SPEED_LOCK_FILE = '/tmp/sync_site_speed.lock';
+const SITE_SPEED_RESULT_FILE = '/tmp/sync_site_speed_result.json';
+const SITE_SPEED_HISTORY_FILE = '/tmp/sync_site_speed_history.json';
+const SITE_SPEED_HISTORY_MAX = 12;
+
+function site_speed_job_running(): bool
+{
+    if (!is_readable(SITE_SPEED_LOCK_FILE)) {
+        return false;
+    }
+    $lock = json_decode((string)file_get_contents(SITE_SPEED_LOCK_FILE), true);
+    $pid = (int)($lock['pid'] ?? 0);
+    if ($pid > 0 && trim(run('kill -0 ' . $pid . ' 2>/dev/null', 1)) === '') {
+        return true;
+    }
+    @unlink(SITE_SPEED_LOCK_FILE);
+    return false;
+}
+
+/** @return array<string, mixed> */
+function site_speed_read_history(): array
+{
+    if (!is_readable(SITE_SPEED_HISTORY_FILE)) {
+        return [];
+    }
+    $data = json_decode((string)file_get_contents(SITE_SPEED_HISTORY_FILE), true);
+    return is_array($data) ? $data : [];
+}
+
+/** @param array<string, mixed> $result */
+function site_speed_append_history(array $result): void
+{
+    $history = site_speed_read_history();
+    array_unshift($history, [
+        'at' => $result['at'] ?? date('c'),
+        'label' => $result['label'] ?? '',
+        'mb_per_test' => $result['mb_per_test'] ?? null,
+        'ssh_edercis_to_bp_mbps' => $result['ssh_edercis_to_bp_mbps'] ?? null,
+        'ssh_bp_to_ederics_mbps' => $result['ssh_bp_to_ederics_mbps'] ?? null,
+        'http_edercis_to_bp_mbps' => $result['http_edercis_to_bp_mbps'] ?? null,
+        'ping_ms' => $result['ping_ms'] ?? [],
+    ]);
+    $history = array_slice($history, 0, SITE_SPEED_HISTORY_MAX);
+    @file_put_contents(SITE_SPEED_HISTORY_FILE, json_encode($history, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+}
+
+/** @return array<string, mixed> */
+function start_site_speed_job(int $mb, string $label): array
+{
+    if (site_speed_job_running()) {
+        $lock = json_decode((string)file_get_contents(SITE_SPEED_LOCK_FILE), true) ?: [];
+        return [
+            'status' => 'running',
+            'message' => 'Mérés már fut',
+            'label' => $lock['label'] ?? '',
+            'started' => $lock['started'] ?? null,
+        ];
+    }
+    $mb = max(5, min(SITE_SPEED_MAX_MB, $mb));
+    $label = trim(preg_replace('/[^\p{L}\p{N}\s._()\/-]/u', '', $label) ?? '');
+    $php = is_executable('/usr/local/bin/php82') ? '/usr/local/bin/php82' : 'php';
+    $worker = __DIR__ . '/run_site_speed.php';
+    @unlink(SITE_SPEED_RESULT_FILE);
+    $cmd = sprintf(
+        'nohup %s %s %d %s >> /tmp/sync_site_speed_worker.log 2>&1 &',
+        escapeshellarg($php),
+        escapeshellarg($worker),
+        $mb,
+        escapeshellarg($label)
+    );
+    run($cmd, 5);
+    usleep(300000);
+    if (!site_speed_job_running()) {
+        throw new RuntimeException('Háttér mérés nem indult el — lásd /tmp/sync_site_speed_worker.log');
+    }
+    return [
+        'status' => 'started',
+        'mb' => $mb,
+        'label' => $label,
+        'message' => 'Mérés háttérben fut — a monitor továbbra is elérhető',
+    ];
+}
+
+/** @return array<string, mixed> */
+function site_speed_poll(): array
+{
+    if (site_speed_job_running()) {
+        $lock = json_decode((string)file_get_contents(SITE_SPEED_LOCK_FILE), true) ?: [];
+        return [
+            'status' => 'running',
+            'label' => $lock['label'] ?? '',
+            'started' => $lock['started'] ?? null,
+            'mb' => $lock['mb'] ?? null,
+        ];
+    }
+    if (is_readable(SITE_SPEED_RESULT_FILE)) {
+        $result = json_decode((string)file_get_contents(SITE_SPEED_RESULT_FILE), true);
+        if (is_array($result)) {
+            return [
+                'status' => (string)($result['status'] ?? 'done'),
+                'result' => $result,
+                'history' => site_speed_read_history(),
+            ];
+        }
+    }
+    return ['status' => 'idle', 'history' => site_speed_read_history()];
+}
+
+function ping_ms(string $host): ?float
+{
+    $t0 = microtime(true);
+    $errno = 0;
+    $errstr = '';
+    $fp = @fsockopen($host, 22, $errno, $errstr, 2.0);
+    if ($fp === false) {
+        return null;
+    }
+    fclose($fp);
+    return round((microtime(true) - $t0) * 1000, 1);
+}
+
+function parse_shell_seconds(string $out): ?float
+{
+    $out = trim($out);
+    if ($out === '') {
+        return null;
+    }
+    $lines = preg_split('/\r?\n/', $out) ?: [];
+    $last = trim((string)end($lines));
+    if (is_numeric($last)) {
+        return (float)$last;
+    }
+    if (preg_match('/real\s+(\d+)m([\d.]+)s/', $out, $m)) {
+        return (int)$m[1] * 60 + (float)$m[2];
+    }
+    if (preg_match('/real\s+([\d.]+)s/', $out, $m)) {
+        return (float)$m[1];
+    }
+    return null;
+}
+
+function measure_ssh_throughput(string $direction, int $mb): ?float
+{
+    $remote = escapeshellarg('sitkeitamas@' . DSM2_HOST);
+    $ssh = sprintf(
+        'ssh -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=5 -p %d %s',
+        DSM2_PORT,
+        $remote
+    );
+    if ($direction === 'e2b') {
+        $cmd = sprintf(
+            'sh -c %s',
+            escapeshellarg(sprintf(
+                'TIMEFORMAT=%%R; time ( %s "dd if=/dev/zero bs=1M count=%d 2>/dev/null" | dd of=/dev/null bs=1M 2>/dev/null ) 2>&1',
+                $ssh,
+                $mb
+            ))
+        );
+    } elseif ($direction === 'b2e') {
+        $cmd = sprintf(
+            'sh -c %s',
+            escapeshellarg(sprintf(
+                'TIMEFORMAT=%%R; time ( dd if=/dev/zero bs=1M count=%d 2>/dev/null | %s "dd of=/dev/null bs=1M 2>/dev/null" ) 2>&1',
+                $mb,
+                $ssh
+            ))
+        );
+    } else {
+        return null;
+    }
+    $out = run($cmd, SITE_SPEED_TIMEOUT_SEC + 10);
+    $sec = parse_shell_seconds($out);
+    if ($sec === null || $sec <= 0) {
+        return null;
+    }
+    return round($mb * 8 / $sec, 1);
+}
+
+/** @return array<string, mixed> */
+function measure_site_speed(int $mb = 20): array
+{
+    $mb = max(5, min(SITE_SPEED_MAX_MB, $mb));
+    $blobUrl = sprintf(
+        'http://%s:%d/speed_blob.php?mb=%d',
+        BIND_HOST,
+        SPEED_PORT,
+        $mb
+    );
+    $httpMbps = null;
+    $curlRemote = sprintf(
+        "curl -sS -m %d -o /dev/null -w '%%{speed_download}' %s",
+        SITE_SPEED_TIMEOUT_SEC,
+        $blobUrl
+    );
+    $bps = remote_ssh(DSM2_HOST, $curlRemote, 'sitkeitamas', DSM2_PORT, SITE_SPEED_TIMEOUT_SEC + 5);
+    if ($bps !== '' && is_numeric($bps)) {
+        $httpMbps = round((float)$bps * 8 / 1_000_000, 1);
+    }
+    return [
+        'at' => date('c'),
+        'mb_per_test' => $mb,
+        'ping_ms' => [
+            'bp_beryl' => ping_ms('192.168.5.1'),
+            'ederberyl' => ping_ms('192.168.10.1'),
+            'naszareti' => ping_ms(DSM2_HOST),
+        ],
+        'ssh_edercis_to_bp_mbps' => measure_ssh_throughput('e2b', $mb),
+        'ssh_bp_to_ederics_mbps' => measure_ssh_throughput('b2e', $mb),
+        'http_edercis_to_bp_mbps' => $httpMbps,
+        'notes' => [
+            'ssh_* = rsync-szerű út (SSH a két NAS között, S2S VPN-en)',
+            'http_* = Ederics NAS letölt BP sync monitor blob-ból (8766)',
+            'A mérés háttérben fut — a monitor (8765) nem blokkolódik',
+        ],
+    ];
 }

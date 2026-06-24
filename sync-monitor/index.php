@@ -62,7 +62,7 @@ deny_if_external();
 </head>
 <body>
   <h1>NAS Sync Monitor</h1>
-  <p class="sub">Belső panel · <?= htmlspecialchars(BIND_HOST . ':' . BIND_PORT) ?> · csak LAN/VPN · <a href="docs.php" style="color:var(--accent)">Dokumentáció</a></p>
+  <p class="sub">Belső panel · <?= htmlspecialchars(BIND_HOST . ':' . BIND_PORT) ?> · csak LAN/VPN · <a href="docs.php" style="color:var(--accent)">Dokumentáció</a> · <a href="speed.php" style="color:var(--accent)">Sebességteszt</a></p>
   <div id="msg"></div>
 
   <h3>Áttekintés — jobok</h3>

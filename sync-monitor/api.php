@@ -59,6 +59,16 @@ try {
             ], JSON_UNESCAPED_UNICODE);
             break;
 
+        case 'site_speed':
+            $mb = max(5, min(SITE_SPEED_MAX_MB, (int)($_GET['mb'] ?? $_POST['mb'] ?? 20)));
+            $label = (string)($_GET['label'] ?? $_POST['label'] ?? '');
+            echo json_encode(start_site_speed_job($mb, $label), JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+            break;
+
+        case 'site_speed_poll':
+            echo json_encode(site_speed_poll(), JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+            break;
+
         default:
             throw new RuntimeException('Ismeretlen action');
     }
