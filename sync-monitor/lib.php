@@ -9,6 +9,8 @@ const HOMES_FOLDERS_FILE = SCRIPTS_DIR . '/sync_homes_folders.conf';
 const VIDEO_LOG = SCRIPTS_DIR . '/video_sync.log';
 const HOMES_LOG = SCRIPTS_DIR . '/homes_sync.log';
 const WEBCAM_LOG = SCRIPTS_DIR . '/sync_log.txt';
+const MAILPLUS_LOG = SCRIPTS_DIR . '/mailplus_sync.log';
+const MAILPLUS_ENV_FILE = SCRIPTS_DIR . '/sync_mailplus.env';
 const HOMES_PENDING_FILE = '/tmp/sync_homes_pending';
 const DSM2_HOST = '192.168.9.19';
 const DSM2_PORT = 22;
@@ -268,15 +270,20 @@ function dsm2_bidir_status(bool $refresh = false): array
 
 function process_status(?array $bidir = null): array
 {
-    $ps = run('ps aux 2>/dev/null | grep -E "sync_(video|homes)|rsync" | grep -v grep', 3);
+    $ps = run('ps aux 2>/dev/null | grep -E "sync_(video|homes|mailplus|ederics)|rsync" | grep -v grep', 3);
     $videoRsync = [];
     $homesRsync = [];
+    $mailplusRsync = [];
     foreach (explode("\n", $ps) as $line) {
         if ($line === '' || !str_contains($line, 'rsync')) {
             continue;
         }
         // ssh gyerek: „rsync --server …” — nem külön sync példány
         if (str_contains($line, 'rsync --server')) {
+            continue;
+        }
+        if (str_contains($line, 'mailplus-server') || str_contains($line, '@MailPlus')) {
+            $mailplusRsync[] = preg_replace('/\s+/', ' ', trim($line));
             continue;
         }
         if (str_contains($line, 'dsm2') || str_contains($line, '192.168.9.19')) {
@@ -303,10 +310,39 @@ function process_status(?array $bidir = null): array
         'video_bidir_ok' => (bool)($bidir['ok'] ?? false),
         'homes_trigger' => str_contains($ps, 'sync_homes_trigger'),
         'homes_sync' => str_contains($ps, 'sync_homes_to_dsm3'),
+        'mailplus_sync' => str_contains($ps, 'sync_mailplus_to_dsm2'),
+        'mailplus_rsync' => $mailplusRsync,
+        'webcam_sync' => str_contains($ps, 'sync_ederics'),
         'video_rsync' => $videoRsync,
         'homes_rsync' => $homesRsync,
         'homes_pending' => is_file(HOMES_PENDING_FILE),
     ];
+}
+
+/** @param list<string> $errorLines */
+function mailplus_last_run_ok(?string $startTs, ?string $endTs, array $errorLines): bool
+{
+    if ($startTs === null || $endTs === null || $endTs < $startTs) {
+        return false;
+    }
+    $kesz = log_last_match(MAILPLUS_LOG, 'KÉSZ |');
+    if ($kesz === null) {
+        $kesz = log_last_match(MAILPLUS_LOG, 'DRY_RUN KÉSZ');
+    }
+    $keszTs = parse_ts($kesz);
+    if ($keszTs !== null && $keszTs >= $startTs && $keszTs <= $endTs) {
+        return true;
+    }
+    foreach ($errorLines as $line) {
+        $ts = parse_ts($line);
+        if ($ts === null || $ts < $startTs || $ts > $endTs) {
+            continue;
+        }
+        if (str_contains($line, 'HIBA:') && !str_contains($line, 'FIGYELMEZTETÉS')) {
+            return false;
+        }
+    }
+    return false;
 }
 
 function cached_remote_disk(string $key, string $host, int $port, bool $refresh = false): string
@@ -599,26 +635,115 @@ function build_jobs_summary(array $processes, ?array $bidir = null): array
         'pending' => $homesPending,
     ];
 
+    // --- MailPlus → DSM2 ---
+    $mailEnv = parse_env_file(MAILPLUS_ENV_FILE);
+    $mailStart = (int)($mailEnv['SYNC_HOUR_START'] ?? 2);
+    $mailEnd = (int)($mailEnv['SYNC_HOUR_END'] ?? 5);
+    $mStart = log_last_match(MAILPLUS_LOG, 'INDUL:');
+    $mEnd = log_last_match(MAILPLUS_LOG, 'MailPlus szinkron VÉGE');
+    $mStartTs = parse_ts($mStart);
+    $mEndTs = parse_ts($mEnd);
+    $mDuration = null;
+    if ($mEnd && preg_match('/\| (\d+) mp ---/', $mEnd, $m)) {
+        $mDuration = (int)$m[1];
+    }
+    $mErrorLines = log_grep_tail(MAILPLUS_LOG, 'HIBA:', 12);
+    if ($mStartTs) {
+        $mErrorLines = array_values(array_filter(
+            $mErrorLines,
+            static function (string $line) use ($mStartTs): bool {
+                $ts = parse_ts($line);
+                return $ts !== null && $ts >= $mStartTs;
+            }
+        ));
+    }
+    $mErrors = array_map(
+        static fn(string $line): string => preg_replace('/^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] /', '', $line),
+        array_slice($mErrorLines, -5)
+    );
+    $mRunning = !empty($processes['mailplus_sync'])
+        || count($processes['mailplus_rsync'] ?? []) > 0;
+    $mOk = !$mRunning && $mStartTs && $mEndTs && $mEndTs >= $mStartTs
+        && mailplus_last_run_ok($mStartTs, $mEndTs, $mErrorLines);
+    $mStatus = 'unknown';
+    $mLabel = 'Nincs adat';
+    $mHints = [];
+    if ($mRunning) {
+        $mStatus = 'running';
+        $mLabel = 'Fut';
+    } elseif ($mOk) {
+        $mStatus = 'ok';
+        $mLabel = 'Sikeres (utolsó kör)';
+    } elseif ($mStartTs && (!$mEndTs || ($mEndTs && $mEndTs < $mStartTs))) {
+        $mStatus = 'error';
+        $mLabel = 'Megszakadt?';
+        $mHints[] = 'INDUL van, de nincs VÉGE — ps aux | grep sync_mailplus';
+    } elseif ($mErrors !== []) {
+        $mStatus = 'error';
+        $mLabel = 'Hiba (' . count($mErrors) . ')';
+    }
+    foreach ($mErrors as $err) {
+        if (str_contains($err, 'timeout') || str_contains($err, 'Timeout') || str_contains($err, 'Connection refused')) {
+            $mHints[] = 'SSH timeout a DSM2 (.19) felé — VPN vagy naszareti elérhetőség 03:30-kor?';
+        } elseif (str_contains($err, 'távoli mappa')) {
+            $mHints[] = 'Cél mappa: naszareti /volume1/NetBackup/mailplus-server — írási jog';
+        }
+    }
+    $mHints = array_values(array_unique($mHints));
+    $mShowEnd = (!$mRunning && $mEndTs && $mStartTs && $mEndTs >= $mStartTs) ? $mEndTs : null;
+    $jobs[] = [
+        'id' => 'mailplus',
+        'name' => 'MailPlus → DSM2',
+        'status' => $mStatus,
+        'status_label' => $mLabel,
+        'last_start' => $mStartTs,
+        'last_end' => $mShowEnd,
+        'duration_sec' => $mRunning ? null : $mDuration,
+        'duration_human' => $mRunning ? 'folyamatban…' : ($mDuration !== null ? format_duration($mDuration) : '—'),
+        'next_run' => 'DSM task: naponta 03:30 · ablak ' . $mailStart . ':00–' . $mailEnd . ':00',
+        'hints' => $mHints,
+        'errors' => array_slice($mErrors, 0, 5),
+        'running' => $mRunning,
+    ];
+
     // --- Webcam ---
     $wLines = read_log_lines(WEBCAM_LOG, 80);
     $wStart = last_line_matching($wLines, '/Válogatás és Web frissítés indul/');
     $wEnd = last_line_matching($wLines, '/--- KÉSZ ---/');
     $wStartTs = parse_ts($wStart);
     $wEndTs = parse_ts($wEnd);
-    $wOk = $wStartTs && $wEndTs && $wEndTs >= $wStartTs;
+    $wRunning = !empty($processes['webcam_sync']);
+    $wOk = !$wRunning && $wStartTs && $wEndTs && $wEndTs >= $wStartTs;
+    $wStatus = 'unknown';
+    $wLabel = 'Nincs adat';
+    if ($wRunning) {
+        $wStatus = 'running';
+        $wLabel = 'Fut (sync_ederics)';
+    } elseif ($wOk) {
+        $wStatus = 'ok';
+        $wLabel = 'Sikeres';
+    } elseif ($wStartTs) {
+        $wStatus = 'warn';
+        $wLabel = 'Folyamatban? / régi kör';
+    }
+    $wHints = [];
+    if ($wRunning) {
+        $wHints[] = 'DSM2 snapshot → nasznagy web — 10 perces DSM task';
+    }
     $jobs[] = [
         'id' => 'webcam',
         'name' => 'Webcam → homepage',
-        'status' => $wOk ? 'ok' : ($wStartTs ? 'running' : 'unknown'),
-        'status_label' => $wOk ? 'Sikeres' : ($wStartTs ? 'Folyamatban?' : 'Nincs adat'),
+        'status' => $wStatus,
+        'status_label' => $wLabel,
         'last_start' => $wStartTs,
         'last_end' => $wOk ? $wEndTs : null,
         'duration_sec' => null,
-        'duration_human' => ($wStartTs && $wEndTs) ? format_duration(max(1, strtotime($wEndTs) - strtotime($wStartTs))) : '—',
+        'duration_human' => ($wStartTs && $wEndTs && $wEndTs >= $wStartTs)
+            ? format_duration(max(1, strtotime($wEndTs) - strtotime($wStartTs))) : '—',
         'next_run' => 'DSM task: 10 percenként (sync_ederics.sh)',
-        'hints' => [],
+        'hints' => $wHints,
         'errors' => [],
-        'running' => false,
+        'running' => $wRunning,
     ];
 
     // --- Monitor ---
@@ -701,6 +826,10 @@ function build_status(bool $includeSizes = false, bool $refreshDisk = false): ar
             'remote_disk' => cached_remote_disk('homes_disk', $homesHost, $homesPort, $refreshDisk),
             'log' => tail_file(HOMES_LOG, 35),
         ],
+        'mailplus' => [
+            'env' => parse_env_file(MAILPLUS_ENV_FILE),
+            'log' => tail_file(MAILPLUS_LOG, 35),
+        ],
         'webcam_log' => tail_file(WEBCAM_LOG, 15),
         'folders' => $videoFolders,
         'env' => $videoEnv,
@@ -769,6 +898,7 @@ function run_action(string $action): string
         'restart' => run('bash ' . escapeshellarg($base . '/sync_control.sh') . ' restart'),
         'sync_now' => run('bash ' . escapeshellarg($base . '/sync_now.sh') . ' &'),
         'sync_homes_now' => run('bash ' . escapeshellarg($base . '/sync_homes_now.sh') . ' &'),
+        'sync_mailplus_now' => run('bash ' . escapeshellarg($base . '/sync_mailplus_now.sh') . ' &'),
         'sync_video_bidir_now' => run(
             'ssh -o ConnectTimeout=10 -o BatchMode=yes -p ' . DSM2_PORT . ' '
             . escapeshellarg('sitkeitamas@' . DSM2_HOST) . ' '

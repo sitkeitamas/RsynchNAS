@@ -165,8 +165,32 @@ deny_if_external();
         <div class="btns"><button type="submit" class="homes">Homes mentés</button></div>
       </form>
     </div>
+  </div>
+
+  <h3>DSM2 — MailPlus standby (naszareti)</h3>
+  <div class="grid">
     <div class="card">
-      <h2>Webcam log</h2>
+      <h2>MailPlus állapot</h2>
+      <div id="mailplus-proc">—</div>
+      <div class="btns">
+        <button type="button" onclick="ctl('sync_mailplus_now')">MailPlus sync most</button>
+      </div>
+      <p class="sub" style="margin:.75rem 0 0;font-size:.78rem">@MailPlus-Server → NetBackup/mailplus-server · DSM task 03:30 · ablak 02:00–05:00</p>
+    </div>
+    <div class="card">
+      <h2>mailplus_sync.log</h2>
+      <pre id="mailplus-log">…</pre>
+    </div>
+  </div>
+
+  <h3>Webcam → homepage (DSM2 snapshot · 10 perc)</h3>
+  <div class="grid">
+    <div class="card">
+      <h2>Webcam állapot</h2>
+      <div id="webcam-proc">—</div>
+    </div>
+    <div class="card">
+      <h2>sync_log.txt</h2>
       <pre id="webcam-log">…</pre>
     </div>
   </div>
@@ -261,6 +285,8 @@ async function refresh() {
     <div>${videoLine}</div>
     <div style="margin-top:.4rem">Homes trigger: <span class="badge ${p.homes_trigger?'on':'off'}">${p.homes_trigger?'fut':'áll'}</span>
       ${p.homes_pending ? ' <span class="badge pending">pending változás</span>' : ''}</div>
+    <div style="margin-top:.4rem">MailPlus: <span class="badge ${p.mailplus_sync || (p.mailplus_rsync && p.mailplus_rsync.length) ? 'on' : 'off'}">${p.mailplus_sync || (p.mailplus_rsync && p.mailplus_rsync.length) ? 'fut' : 'áll'}</span></div>
+    <div style="margin-top:.4rem">Webcam: <span class="badge ${p.webcam_sync?'on':'off'}">${p.webcam_sync?'fut':'áll'}</span></div>
     <div style="margin-top:.4rem;font-size:.8rem;color:var(--muted)">Frissítve: ${d.time}</div>`;
 
   renderVideoProc(p, v);
@@ -281,6 +307,23 @@ async function refresh() {
   document.getElementById('homes-disk').textContent = 'Naszika tár: ' + (h.remote_disk || '—');
   document.getElementById('homes-sizes').innerHTML = folderTable(h.folders, 'naszika');
   document.getElementById('homes-log').textContent = h.log;
+
+  const mp = d.mailplus || {};
+  if (p.mailplus_rsync && p.mailplus_rsync.length) {
+    document.getElementById('mailplus-proc').innerHTML =
+      '<span class="badge on">rsync fut</span><pre style="margin-top:.5rem">'+p.mailplus_rsync.join('\n')+'</pre>';
+  } else if (p.mailplus_sync) {
+    document.getElementById('mailplus-proc').innerHTML = '<span class="badge on">mailplus sync fut</span>';
+  } else {
+    document.getElementById('mailplus-proc').innerHTML = '<span class="badge off">nincs aktív sync</span>';
+  }
+  document.getElementById('mailplus-log').textContent = mp.log || '—';
+
+  if (p.webcam_sync) {
+    document.getElementById('webcam-proc').innerHTML = '<span class="badge on">sync_ederics fut</span>';
+  } else {
+    document.getElementById('webcam-proc').innerHTML = '<span class="badge off">nincs aktív sync</span>';
+  }
   document.getElementById('webcam-log').textContent = d.webcam_log;
 
   ['REMOTE_HOST','REMOTE_PORT','RSYNC_BWLIMIT','POLL_INTERVAL_SEC'].forEach(k => {
@@ -305,9 +348,10 @@ async function ctl(cmd) {
   const labels = {
     sync_now: 'videó',
     sync_video_bidir_now: 'videó bidir (DSM2)',
-    sync_homes_now: 'homes (naszika)'
+    sync_homes_now: 'homes (naszika)',
+    sync_mailplus_now: 'MailPlus (DSM2)'
   };
-  if ((cmd === 'sync_now' || cmd === 'sync_video_bidir_now' || cmd === 'sync_homes_now') && !confirm(`Azonnali ${labels[cmd] || cmd} sync indul. OK?`)) return;
+  if ((cmd === 'sync_now' || cmd === 'sync_video_bidir_now' || cmd === 'sync_homes_now' || cmd === 'sync_mailplus_now') && !confirm(`Azonnali ${labels[cmd] || cmd} sync indul. OK?`)) return;
   const fd = new FormData(); fd.append('action','control'); fd.append('cmd', cmd);
   const r = await fetch('api.php', { method:'POST', body: fd });
   const d = await r.json();
